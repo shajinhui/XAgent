@@ -96,9 +96,11 @@ def build_graph():
 def main() -> None:
     load_dotenv()
 
-    # 若你接 DeepSeek，需要在 .env 中提供 DEEPSEEK_API_KEY，并把 MODEL_PROVIDER 设为 deepseek。
-    if os.getenv("MODEL_PROVIDER", "openai") == "openai" and not os.getenv("OPENAI_API_KEY"):
+    provider = os.getenv("MODEL_PROVIDER", "openai")
+    if provider == "openai" and not os.getenv("OPENAI_API_KEY"):
         raise RuntimeError("缺少 OPENAI_API_KEY，请先在 .env 中配置")
+    if provider == "deepseek" and not os.getenv("DEEPSEEK_API_KEY"):
+        raise RuntimeError("缺少 DEEPSEEK_API_KEY，请先在 .env 中配置")
 
     app = build_graph()
     system_prompt = (

@@ -1,43 +1,42 @@
-# Codex 类 Agent（阶段 0 + 阶段 1）
+# Codex-mini
 
-当前仓库已包含两部分能力：
+一个用于学习和实习展示的 Codex 类 Agent 项目（Python 版）。
 
-- 阶段 0：Docker 本地沙箱执行器
-- 阶段 1：`LangGraph + LiteLLM` 终端版最小 Agent 循环
+## 标准开发流程
 
-## 快速开始
-
-1. 创建并激活虚拟环境：
+1. 初始化环境与依赖
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+make init
 ```
 
-2. 安装依赖：
-
-```bash
-pip install -r requirements.txt
-```
-
-3. 配置环境变量：
+2. 配置环境变量
 
 ```bash
 cp .env.example .env
 ```
 
-4. 运行阶段 1 Agent：
+3. 启动 Agent（阶段 1）
 
 ```bash
+make run
+```
+
+## 手动方式（可选）
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 python agent_loop.py
 ```
 
-## 目录结构
+## 项目结构
 
 - `agent_loop.py`：终端版 Agent 主循环（LangGraph 条件循环）
 - `tools/toolkit.py`：工具定义、参数校验、工具执行
-- `sandbox/executor.py`：Docker 沙箱执行器（阶段 0）
-- `main.py`：沙箱自检入口
+- `pyproject.toml`：项目元信息与依赖（标准 Python 项目配置）
+- `Makefile`：标准化开发命令入口
 
 ## 说明
 
