@@ -1,10 +1,9 @@
-# Codex 类 Agent（第 0 阶段初始化）
+# Codex 类 Agent（阶段 0 + 阶段 1）
 
-当前仓库已完成第 0 阶段基础搭建，包含：
+当前仓库已包含两部分能力：
 
-- Python 项目脚手架
-- 基于 Docker 的本地沙箱执行器
-- 基础 Git 仓库初始化
+- 阶段 0：Docker 本地沙箱执行器
+- 阶段 1：`LangGraph + LiteLLM` 终端版最小 Agent 循环
 
 ## 快速开始
 
@@ -27,18 +26,21 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-4. 运行沙箱自检：
+4. 运行阶段 1 Agent：
 
 ```bash
-python main.py
+python agent_loop.py
 ```
 
 ## 目录结构
 
-- `sandbox/executor.py`：Docker 沙箱命令执行器
-- `main.py`：最小化运行入口（自检示例）
+- `agent_loop.py`：终端版 Agent 主循环（LangGraph 条件循环）
+- `tools/toolkit.py`：工具定义、参数校验、工具执行
+- `sandbox/executor.py`：Docker 沙箱执行器（阶段 0）
+- `main.py`：沙箱自检入口
 
 ## 说明
 
-- 需要先安装并启动 Docker Desktop。
-- 命令会在隔离容器内执行，并包含超时与基础危险命令拦截。
+- 如果使用 OpenAI：配置 `OPENAI_API_KEY`，并保持 `MODEL_PROVIDER=openai`。
+- 如果使用 DeepSeek：配置 `DEEPSEEK_API_KEY`，并把 `MODEL_PROVIDER=deepseek`。
+- 阶段 1 的 `run_command` 先使用本地 `subprocess`；阶段 2 会切到 Docker 沙箱执行。
