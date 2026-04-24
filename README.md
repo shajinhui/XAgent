@@ -1,44 +1,44 @@
-# Codex-like Agent (Stage 0 Bootstrap)
+# Codex 类 Agent（第 0 阶段初始化）
 
-This repository is initialized for Stage 0 with:
+当前仓库已完成第 0 阶段基础搭建，包含：
 
-- Python project scaffold
-- Docker-based sandbox executor (local)
-- Basic Git repository bootstrap
+- Python 项目脚手架
+- 基于 Docker 的本地沙箱执行器
+- 基础 Git 仓库初始化
 
-## Quick Start
+## 快速开始
 
-1. Create and activate virtualenv:
+1. 创建并激活虚拟环境：
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-2. Install dependencies:
+2. 安装依赖：
 
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Configure environment:
+3. 配置环境变量：
 
 ```bash
 cp .env.example .env
 ```
 
-4. Run sandbox smoke test:
+4. 运行沙箱自检：
 
 ```bash
 python main.py
 ```
 
-## Project Structure
+## 目录结构
 
-- `sandbox/executor.py`: Docker sandbox command runner
-- `main.py`: simple smoke test entrypoint
+- `sandbox/executor.py`：Docker 沙箱命令执行器
+- `main.py`：最小化运行入口（自检示例）
 
-## Notes
+## 说明
 
-- Docker Desktop must be installed and running.
-- Commands are executed in isolated containers with timeout and basic deny-list checks.
+- 需要先安装并启动 Docker Desktop。
+- 命令会在隔离容器内执行，并包含超时与基础危险命令拦截。

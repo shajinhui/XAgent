@@ -8,9 +8,9 @@ if __name__ == "__main__":
     sandbox = DockerSandbox(project_root=str(root))
 
     result = sandbox.run("python --version")
-    print("ok:", result.ok)
-    print("exit_code:", result.exit_code)
+    print("执行成功:", result.ok)
+    print("退出码:", result.exit_code)
     if result.stdout:
-        print("stdout:\n", result.stdout)
+        print("标准输出:\n", result.stdout)
     if result.stderr:
-        print("stderr:\n", result.stderr)
+        print("错误输出:\n", result.stderr)

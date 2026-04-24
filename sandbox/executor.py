@@ -21,6 +21,8 @@ DANGEROUS_PATTERNS = [
 
 @dataclass
 class SandboxResult:
+    """沙箱执行结果。"""
+
     ok: bool
     exit_code: int
     stdout: str
@@ -30,6 +32,8 @@ class SandboxResult:
 
 
 class DockerSandbox:
+    """基于 Docker 的最小沙箱执行器。"""
+
     def __init__(
         self,
         project_root: str,
@@ -41,13 +45,15 @@ class DockerSandbox:
         self.timeout_seconds = timeout_seconds
 
     def _validate_command(self, command: str) -> Optional[str]:
+        """执行前进行危险命令模式拦截。"""
         normalized = " ".join(command.strip().split()).lower()
         for pattern in DANGEROUS_PATTERNS:
             if re.search(pattern, normalized):
-                return f"Blocked dangerous command pattern: {pattern}"
+                return f"已拦截危险命令模式: {pattern}"
         return None
 
     def run(self, command: str) -> SandboxResult:
+        """在隔离容器中执行命令并返回结果。"""
         reason = self._validate_command(command)
         if reason:
             return SandboxResult(
@@ -66,7 +72,7 @@ class DockerSandbox:
                 ok=False,
                 exit_code=127,
                 stdout="",
-                stderr=f"Docker unavailable: {exc}",
+                stderr=f"Docker 不可用: {exc}",
             )
 
         if not self.project_root.exists() or not self.project_root.is_dir():
@@ -74,7 +80,7 @@ class DockerSandbox:
                 ok=False,
                 exit_code=127,
                 stdout="",
-                stderr=f"Invalid project root: {self.project_root}",
+                stderr=f"项目根目录无效: {self.project_root}",
             )
 
         try:
@@ -108,10 +114,10 @@ class DockerSandbox:
                 stdout=stdout,
                 stderr=stderr,
             )
-        except Exception as exc:  # pragma: no cover - defensive path
+        except Exception as exc:  # pragma: no cover - 防御性兜底分支
             return SandboxResult(
                 ok=False,
                 exit_code=1,
                 stdout="",
-                stderr=f"Sandbox execution failed: {exc}",
+                stderr=f"沙箱执行失败: {exc}",
             )
