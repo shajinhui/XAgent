@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from langgraph.graph import END, START, StateGraph
 from litellm import completion
 
-from tools.toolkit import execute_tool_call, get_tool_schemas
+from tools.registry import ToolRegistry
 
 
 class AgentState(TypedDict):
@@ -41,13 +41,13 @@ def _build_model_name() -> str:
     return f"{provider}/{model}"
 
 
-def call_model(state: AgentState) -> AgentState:
+def call_model(state: AgentState, registry: ToolRegistry) -> AgentState:
     """调用 LLM 模型节点并将模型响应附加到消息列表中。
 
     输入：当前 AgentState（包含已有消息）。
     行为：使用 `litellm.completion` 调用模型；将返回的模型消息追加到消息列表并返回新的状态。
 
-    注意：completion 中会传入 `tools=get_tool_schemas()`，让模型能够以结构化方式选择工具调用（若需要）。
+    注意：completion 中会传入 `tools=registry.schemas()`，让模型能够以结构化方式选择工具调用（若需要）。
     """
 
     model_name = _build_model_name()
@@ -55,7 +55,7 @@ def call_model(state: AgentState) -> AgentState:
     response = completion(
         model=model_name,
         messages=state["messages"],
-        tools=get_tool_schemas(),
+        tools=registry.schemas(),
         tool_choice="auto",
         temperature=0,
     )
@@ -78,17 +78,16 @@ def should_continue(state: AgentState) -> str:
     return "end"
 
 
-def call_tools(state: AgentState) -> AgentState:
+def call_tools(state: AgentState, registry: ToolRegistry) -> AgentState:
     """执行模型请求的所有工具调用，并把工具输出作为工具消息追加到对话中。
 
     实现细节：
     - 解析最新模型消息中的 `tool_calls` 列表
-    - 对每个调用使用 `execute_tool_call` 执行（该函数在 `tools.toolkit` 中定义）
+    - 对每个调用使用 `registry.execute` 执行（由 ToolRegistry 统一路由）
     - 将每次工具执行的返回结果作为一条 role 为 `tool` 的消息追加，
       并保留 `tool_call_id` 以便模型能将工具输出与先前请求关联
     """
 
-    project_root = Path(__file__).parent.resolve()
     last = state["messages"][-1]
     # 复制原消息列表，后面在此列表上追加工具消息
     new_messages = list(state["messages"])
@@ -96,12 +95,10 @@ def call_tools(state: AgentState) -> AgentState:
     # 遍历模型发起的所有工具调用（如果没有则不会进入循环）
     for tool_call in last.get("tool_calls", []):
         fn = tool_call["function"]
-        # execute_tool_call 的返回值为 (ok: bool, content: str)
-        ok, content = execute_tool_call(
-            project_root=project_root,
-            name=fn["name"],
-            arguments=fn.get("arguments", "{}"),
-        )
+        # registry.execute 的返回值为 ToolResult(ok, content, metadata)
+        result = registry.execute(name=fn["name"], arguments=fn.get("arguments", "{}"))
+        ok = result.ok
+        content = result.content
         if not ok:
             # 如果工具执行失败，使用 [ERROR] 前缀标记，模型会看到这个文本并可据此调整
             content = f"[ERROR] {content}"
@@ -119,7 +116,7 @@ def call_tools(state: AgentState) -> AgentState:
     return {"messages": new_messages}
 
 
-def build_graph():
+def build_graph(registry: ToolRegistry):
     """构建并编译状态机图（StateGraph）。
 
     - model 节点：调用模型（`call_model`）
@@ -128,8 +125,8 @@ def build_graph():
     """
 
     graph = StateGraph(AgentState)
-    graph.add_node("model", call_model)
-    graph.add_node("tools", call_tools)
+    graph.add_node("model", lambda state: call_model(state, registry))
+    graph.add_node("tools", lambda state: call_tools(state, registry))
     graph.add_edge(START, "model")
     graph.add_conditional_edges(
         "model",
@@ -164,12 +161,14 @@ def main() -> None:
         raise RuntimeError("缺少 DEEPSEEK_API_KEY，请先在 .env 中配置")
 
     # 构建状态机应用
-    app = build_graph()
+    project_root = Path(__file__).parent.resolve()
+    registry = ToolRegistry(project_root=project_root)
+    app = build_graph(registry)
 
     # 系统提示，模型将以此作为对话背景
     system_prompt = (
         "你是一个代码助手。"
-        "可以按需调用工具 read_file 和 run_command。"
+        "可以按需调用工具 read_file/write_file/edit_file/grep/run_command。"
         "如果不需要工具，直接给出最终答案。"
     )
 

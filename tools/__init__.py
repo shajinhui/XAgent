@@ -1,2 +1,3 @@
-"""工具模块。"""
+from tools.registry import ToolRegistry
 
+__all__ = ["ToolRegistry"]
