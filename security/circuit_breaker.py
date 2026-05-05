@@ -21,3 +21,12 @@ class CircuitBreaker:
 
     def count(self, session_id: str, category: str) -> int:
         return self._counts[(session_id, category)]
+
+    def reset(self, session_id: str, category: str | None = None) -> None:
+        if category is not None:
+            self._counts[(session_id, category)] = 0
+            return
+
+        for key in list(self._counts):
+            if key[0] == session_id:
+                self._counts[key] = 0

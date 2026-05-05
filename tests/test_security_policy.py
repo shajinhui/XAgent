@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from security.circuit_breaker import CircuitBreaker
 from security.policy import SecurityPolicy
 
 
@@ -61,6 +62,17 @@ class SecurityPolicyTests(unittest.TestCase):
 
             self.assertEqual(decision.action, "deny")
             self.assertEqual(decision.category, "protected_path")
+
+    def test_circuit_breaker_can_reset_suspended_session(self) -> None:
+        breaker = CircuitBreaker(threshold=2)
+
+        self.assertFalse(breaker.record_rejection("session-1", "dangerous_shell"))
+        self.assertTrue(breaker.record_rejection("session-1", "dangerous_shell"))
+        self.assertEqual(breaker.count("session-1", "dangerous_shell"), 2)
+
+        breaker.reset("session-1", "dangerous_shell")
+
+        self.assertEqual(breaker.count("session-1", "dangerous_shell"), 0)
 
 
 if __name__ == "__main__":

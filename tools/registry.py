@@ -64,6 +64,16 @@ class ToolRegistry:
 
         tool = self._tools[name]
         try:
+            if tool.meta.requires_approval and name != "run_command" and not approved:
+                raise ToolPermissionError(
+                    f"工具需要用户确认: {name}",
+                    metadata={
+                        "error_type": "permission_required",
+                        "permission_action": "ask",
+                        "category": "tool_approval",
+                        "tool": name,
+                    },
+                )
             payload["_approved"] = approved
             content = tool.handler(self.ctx, payload)
             return ToolResult(ok=True, content=content, metadata={"tool": name})

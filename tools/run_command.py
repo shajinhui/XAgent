@@ -62,6 +62,17 @@ def run(ctx: ToolExecutionContext, payload: dict) -> str:
             message += "\n会话已自动挂起，请用户确认后恢复。"
         raise ToolPermissionError(message, metadata=metadata)
 
+    if not approved:
+        raise ToolPermissionError(
+            f"命令需要用户确认: {args.command}",
+            metadata={
+                "error_type": "permission_required",
+                "permission_action": "ask",
+                "category": "command_approval",
+                "command": args.command,
+            },
+        )
+
     result = ctx.docker_executor.run(args.command, timeout_seconds=args.timeout)
     if result.ok:
         ctx.circuit_breaker.record_success(ctx.session_id, "dangerous_shell")

@@ -64,6 +64,47 @@ class ToolRegistryTests(unittest.TestCase):
             self.assertEqual(result.metadata["permission_action"], "deny")
             self.assertEqual(result.metadata["category"], "dangerous_shell")
 
+    def test_run_command_allowed_command_still_requests_permission(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = ToolRegistry(Path(tmp))
+
+            result = registry.execute(
+                "run_command",
+                json.dumps({"command": "python -m unittest discover -s tests"}),
+            )
+
+            self.assertFalse(result.ok)
+            self.assertEqual(result.metadata["permission_action"], "ask")
+            self.assertEqual(result.metadata["category"], "command_approval")
+
+    def test_mutating_file_tool_requires_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            registry = ToolRegistry(root)
+
+            result = registry.execute(
+                "write_file",
+                json.dumps({"path": "created.txt", "content": "hello"}),
+            )
+
+            self.assertFalse(result.ok)
+            self.assertEqual(result.metadata["permission_action"], "ask")
+            self.assertFalse((root / "created.txt").exists())
+
+    def test_mutating_file_tool_runs_after_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            registry = ToolRegistry(root)
+
+            result = registry.execute(
+                "write_file",
+                json.dumps({"path": "created.txt", "content": "hello"}),
+                approved=True,
+            )
+
+            self.assertTrue(result.ok)
+            self.assertEqual((root / "created.txt").read_text(encoding="utf-8"), "hello")
+
 
 if __name__ == "__main__":
     unittest.main()
