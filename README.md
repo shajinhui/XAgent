@@ -3,6 +3,8 @@
 # Xagent
 
 一个用于学习和实习展示的 Codex 类本地 Agent 项目：Python runtime 负责模型循环、工具执行、安全策略、沙箱和会话持久化，Electron/Vue 桌面客户端负责聊天、审批、工具过程和历史会话体验。
+<img width="940" height="828" alt="截屏2026-05-13 18 35 59" src="https://github.com/user-attachments/assets/b35d6895-5fda-4d4e-80b1-ea53b1f95b88" />
+
 
 ![](/Users/shajinhui/Desktop/截屏2026-05-13%2018.35.59.png)
 
