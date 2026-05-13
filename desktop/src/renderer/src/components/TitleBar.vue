@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { RuntimeConnectionStatus } from '@renderer/services/runtimeSocket'
+import type { RuntimeWorkspace } from '@renderer/types/runtimeEvents'
 
 const props = defineProps<{
   title: string
@@ -9,6 +10,7 @@ const props = defineProps<{
   connectionStatus: RuntimeConnectionStatus
   isSuspended: boolean
   sidebarOpen: boolean
+  workspace: RuntimeWorkspace | null
 }>()
 
 const emit = defineEmits<{
@@ -17,6 +19,7 @@ const emit = defineEmits<{
   disconnect: []
   resume: []
   newConversation: []
+  openWorkspace: []
 }>()
 
 const statusLabel = computed(() => {
@@ -30,6 +33,8 @@ const statusLabel = computed(() => {
 const canDisconnect = computed(() => props.connectionStatus === 'connected')
 
 const displayTitle = computed(() => props.title.trim() || '新对话')
+
+const workspaceLabel = computed(() => props.workspace?.display_name || '打开工作区')
 </script>
 
 <template>
@@ -48,7 +53,7 @@ const displayTitle = computed(() => props.title.trim() || '新对话')
 
     <div class="title-copy">
       <span class="app-mark" aria-hidden="true"></span>
-      <h1 class="sr-only" :title="displayTitle" :class="{ pending: titleStatus === 'pending' }">
+      <h1 :title="displayTitle" :class="{ pending: titleStatus === 'pending' }">
         {{ displayTitle }}
       </h1>
       <p>
@@ -58,6 +63,19 @@ const displayTitle = computed(() => props.title.trim() || '新对话')
     </div>
 
     <nav class="title-actions" aria-label="会话操作">
+      <button
+        class="workspace-pill"
+        type="button"
+        :title="props.workspace?.root || '打开工作区'"
+        aria-label="打开工作区"
+        @click="emit('openWorkspace')"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M3.5 6.5h6l2 2h9v9.5a2 2 0 0 1-2 2h-15v-13.5Z" />
+          <path d="M3.5 8.5V6a2 2 0 0 1 2-2h3.2l1.8 2.5" />
+        </svg>
+        <span>{{ workspaceLabel }}</span>
+      </button>
       <button
         v-if="isSuspended"
         class="icon-button"

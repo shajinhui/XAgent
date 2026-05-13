@@ -151,6 +151,26 @@ class SessionStore:
             rows = conn.execute(query, params).fetchall()
         return [_row_to_record(row) for row in rows]
 
+    def delete_session(self, session_id: str) -> SessionRecord:
+        record = self.get_session(session_id)
+
+        with self._connect() as conn:
+            conn.execute(
+                """
+                DELETE FROM sessions
+                WHERE session_id = ?
+                """,
+                (record.session_id,),
+            )
+
+        transcript_path = record.transcript_path
+        try:
+            transcript_path.relative_to(self.transcript_dir)
+        except ValueError:
+            transcript_path = self._transcript_path(record.session_id)
+        transcript_path.unlink(missing_ok=True)
+        return record
+
     def load_events(self, session_id: str) -> List[TranscriptEvent]:
         self.get_session(session_id)
         return self.writer(session_id).load()

@@ -1,7 +1,9 @@
-import { app, shell, BrowserWindow } from 'electron'
+import { app, dialog, ipcMain, shell, BrowserWindow, type OpenDialogOptions } from 'electron'
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
 import { existsSync } from 'fs'
+import { mkdir } from 'fs/promises'
 import { createConnection } from 'net'
+import { homedir } from 'os'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -92,6 +94,22 @@ function stopBackend(): void {
   backendProcess = null
 }
 
+function formatLocalDatePathSegment(date = new Date()): string {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  })
+  return formatter.format(date)
+}
+
+async function createDefaultChatDirectory(): Promise<string> {
+  const targetPath = join(homedir(), 'Documents', 'Codex', formatLocalDatePathSegment(), 'new-chat')
+  await mkdir(targetPath, { recursive: true })
+  return targetPath
+}
+
 function createWindow(): void {
   const isMac = process.platform === 'darwin'
 
@@ -146,6 +164,28 @@ app.whenReady().then(() => {
   // 详情见 https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
+  })
+
+  ipcMain.handle('workspace:select-directory', async (event, defaultPath?: string) => {
+    const owner = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const options: OpenDialogOptions = {
+      title: '打开工作区',
+      defaultPath,
+      properties: ['openDirectory']
+    }
+    const result = owner
+      ? await dialog.showOpenDialog(owner, options)
+      : await dialog.showOpenDialog(options)
+
+    if (result.canceled || !result.filePaths.length) {
+      return null
+    }
+
+    return result.filePaths[0]
+  })
+
+  ipcMain.handle('workspace:create-default-chat-directory', async () => {
+    return createDefaultChatDirectory()
   })
 
   void startBackend().finally(() => {

@@ -1,6 +1,10 @@
-# Codex-mini
+# 
+
+# Xagent
 
 一个用于学习和实习展示的 Codex 类本地 Agent 项目：Python runtime 负责模型循环、工具执行、安全策略、沙箱和会话持久化，Electron/Vue 桌面客户端负责聊天、审批、工具过程和历史会话体验。
+
+![](/Users/shajinhui/Desktop/截屏2026-05-13%2018.35.59.png)
 
 ## 标准开发流程
 
@@ -66,10 +70,13 @@ python agent_loop.py
 
 阶段四产品化路线见：[`docs/PRODUCTIZATION_ROADMAP.md`](docs/PRODUCTIZATION_ROADMAP.md)
 
+workspace 与权限策略专题架构见：[`docs/WORKSPACE_PERMISSION_ARCHITECTURE.md`](docs/WORKSPACE_PERMISSION_ARCHITECTURE.md)
+
 ## 说明
 
 - 如果使用 OpenAI：配置 `OPENAI_API_KEY`，并保持 `MODEL_PROVIDER=openai`。
 - 如果使用 DeepSeek：配置 `DEEPSEEK_API_KEY`，并把 `MODEL_PROVIDER=deepseek`。
+- 桌面端会从后端读取模型配置；`MODEL_OPTIONS` 可扩展输入栏旁边的模型下拉列表，`REASONING_EFFORT=off|low|medium|high` 可设置默认思考程度。
 - 阶段 2 已将 `run_command` 切换到 macOS 原生沙箱执行，并增加命令白名单、风险拦截和工具元信息。
 - macOS 沙箱当前使用 `sandbox-exec`/Seatbelt：命令在真实项目目录执行，默认禁止网络，只允许写项目目录和临时目录，并受命令策略限制。
 - 如果当前进程本身已经处在受限沙箱里，`sandbox-exec` 可能返回 `sandbox_apply: Operation not permitted`；正常终端/桌面应用运行环境下再做端到端验证。

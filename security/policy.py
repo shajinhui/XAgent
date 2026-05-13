@@ -82,6 +82,27 @@ class SecurityPolicy:
             raise ValueError(f"路径越界，禁止访问: {resolved}")
         return resolved
 
+    def resolve_command_cwd(self, raw_cwd: str | None = None) -> Path:
+        if raw_cwd is None or not raw_cwd.strip():
+            return self.project_root
+
+        resolved = self.resolve_path(raw_cwd)
+        if not resolved.exists():
+            raise ValueError(f"命令工作目录不存在: {resolved}")
+        if not resolved.is_dir():
+            raise ValueError(f"命令工作目录必须是目录: {resolved}")
+
+        try:
+            relative = resolved.relative_to(self.project_root)
+        except ValueError as exc:
+            raise ValueError(f"命令工作目录越界: {resolved}") from exc
+
+        first_part = relative.parts[0] if relative.parts else ""
+        if first_part in PROTECTED_WRITE_PREFIXES:
+            raise PermissionError(f"命令工作目录指向受保护路径: {relative.as_posix()}")
+
+        return resolved
+
     def ensure_writable_path(self, path: Path) -> None:
         resolved = path.resolve()
         try:

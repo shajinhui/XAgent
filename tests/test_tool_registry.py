@@ -4,7 +4,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from sandbox.macos_executor import CommandExecResult
 from tools.registry import ToolRegistry
 
 
@@ -76,6 +78,41 @@ class ToolRegistryTests(unittest.TestCase):
             self.assertFalse(result.ok)
             self.assertEqual(result.metadata["permission_action"], "ask")
             self.assertEqual(result.metadata["category"], "command_approval")
+
+    def test_run_command_invalid_cwd_is_denied(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = ToolRegistry(Path(tmp))
+
+            result = registry.execute(
+                "run_command",
+                json.dumps({"command": "echo ok", "cwd": ".."}),
+            )
+
+            self.assertFalse(result.ok)
+            self.assertEqual(result.metadata["permission_action"], "deny")
+            self.assertEqual(result.metadata["category"], "command_cwd")
+
+    def test_run_command_approved_passes_resolved_cwd_to_executor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            nested = root / "desktop"
+            nested.mkdir()
+            registry = ToolRegistry(root)
+
+            with patch.object(
+                registry.ctx.command_executor,
+                "run",
+                return_value=CommandExecResult(True, 0, "ok\n", ""),
+            ) as run_mock:
+                result = registry.execute(
+                    "run_command",
+                    json.dumps({"command": "echo ok", "cwd": "desktop"}),
+                    approved=True,
+                )
+
+            self.assertTrue(result.ok)
+            self.assertIn("cwd: desktop", result.content)
+            self.assertEqual(run_mock.call_args.kwargs["cwd"], nested.resolve())
 
     def test_mutating_file_tool_requires_approval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

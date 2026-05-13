@@ -6,6 +6,15 @@ export type RuntimeSessionState = {
   suspended_at: number | null
 }
 
+export type RuntimeReasoningEffort = 'off' | 'low' | 'medium' | 'high'
+
+export type RuntimeModelConfig = {
+  default_model: string
+  model_options: string[]
+  reasoning_effort: RuntimeReasoningEffort
+  reasoning_effort_options: RuntimeReasoningEffort[]
+}
+
 export type RuntimeToolMetadata = {
   name?: string
   is_read_only?: boolean
@@ -17,6 +26,18 @@ export type RuntimeToolMetadata = {
 }
 
 export type RuntimeToolMetadataMap = Record<string, RuntimeToolMetadata>
+
+export type RuntimeWorkspace = {
+  root: string
+  current_dir: string
+  display_name: string
+  git_root: string | null
+  allowed_roots: string[]
+}
+
+export type RuntimeWorkspaceProject = RuntimeWorkspace & {
+  updated_at: number
+}
 
 export type ConversationTitleMessage = {
   role: 'user' | 'assistant'
@@ -55,6 +76,8 @@ export type ReadyEvent = {
   path: string
   tools: RuntimeToolMetadataMap
   session_state: RuntimeSessionState
+  workspace?: RuntimeWorkspace
+  model_config?: RuntimeModelConfig
 }
 
 export type TurnStartedEvent = RuntimeEventBase & {
@@ -62,6 +85,10 @@ export type TurnStartedEvent = RuntimeEventBase & {
   session_id: string
   turn_id: string
   session_state: RuntimeSessionState
+  model_config?: {
+    model: string
+    reasoning_effort: RuntimeReasoningEffort
+  }
 }
 
 export type SessionCreatedEvent = RuntimeEventBase & {
@@ -69,6 +96,17 @@ export type SessionCreatedEvent = RuntimeEventBase & {
   session_id: string
   previous_state: RuntimeSessionState
   session_state: RuntimeSessionState
+  workspace?: RuntimeWorkspace
+}
+
+export type WorkspaceChangedEvent = RuntimeEventBase & {
+  type: 'workspace_changed'
+  session_id: string
+  previous_workspace: RuntimeWorkspace
+  workspace: RuntimeWorkspace
+  previous_state: RuntimeSessionState
+  session_state: RuntimeSessionState
+  tools: RuntimeToolMetadataMap
 }
 
 export type AssistantTokenEvent = RuntimeEventBase & {
@@ -122,10 +160,12 @@ export type FinalAnswerEvent = RuntimeEventBase & {
 }
 
 export type RuntimeErrorEvent = RuntimeEventBase & {
-  type: 'error'
+  type: 'error' | 'workspace_error'
   message: string
   received_type?: string
   received_request_id?: string
+  requested_workspace?: string
+  workspace?: RuntimeWorkspace
 }
 
 export type ConversationTitleEvent = RuntimeEventBase & {
@@ -137,12 +177,23 @@ export type ConversationTitleEvent = RuntimeEventBase & {
 export type SessionsListEvent = RuntimeEventBase & {
   type: 'sessions_list'
   sessions: RuntimeSessionSummary[]
+  workspace?: RuntimeWorkspace
+}
+
+export type SessionDeletedEvent = RuntimeEventBase & {
+  type: 'session_deleted'
+  deleted_session_id: string
+  deleted_current: boolean
+  session_state: RuntimeSessionState
+  workspace?: RuntimeWorkspace
+  sessions: RuntimeSessionSummary[]
 }
 
 export type RuntimeEvent =
   | ReadyEvent
   | TurnStartedEvent
   | SessionCreatedEvent
+  | WorkspaceChangedEvent
   | AssistantTokenEvent
   | ToolCallStartedEvent
   | ToolCallResultEvent
@@ -152,12 +203,15 @@ export type RuntimeEvent =
   | FinalAnswerEvent
   | ConversationTitleEvent
   | SessionsListEvent
+  | SessionDeletedEvent
   | RuntimeErrorEvent
 
 export type RuntimeClientPacket =
   | {
       type: 'user_input'
       content: string
+      model?: string
+      reasoning_effort?: RuntimeReasoningEffort
       turn_id?: string
     }
   | {
@@ -178,7 +232,20 @@ export type RuntimeClientPacket =
       turn_id?: string
     }
   | {
+      type: 'delete_session'
+      session_id: string
+      workspace_path?: string
+      request_id?: string
+      turn_id?: string
+    }
+  | {
       type: 'new_session'
+      request_id?: string
+      turn_id?: string
+    }
+  | {
+      type: 'open_workspace'
+      path: string
       request_id?: string
       turn_id?: string
     }

@@ -59,7 +59,12 @@ class SecureMacOSSandboxExecutor:
 (allow mach-lookup)
 """.strip()
 
-    def run(self, command: str, timeout_seconds: int | None = None) -> CommandExecResult:
+    def run(
+        self,
+        command: str,
+        timeout_seconds: int | None = None,
+        cwd: Path | None = None,
+    ) -> CommandExecResult:
         if platform.system() != "Darwin":
             return CommandExecResult(False, 127, "", "macOS 原生沙箱仅支持 Darwin/macOS")
 
@@ -70,11 +75,17 @@ class SecureMacOSSandboxExecutor:
         if not self.project_root.exists() or not self.project_root.is_dir():
             return CommandExecResult(False, 127, "", f"项目根目录无效: {self.project_root}")
 
-        shell_command = f"set -eu; cd {shlex.quote(self.project_root.as_posix())}; {command}"
+        command_cwd = (cwd or self.project_root).resolve()
+        if self.project_root not in command_cwd.parents and command_cwd != self.project_root:
+            return CommandExecResult(False, 127, "", f"命令工作目录越界: {command_cwd}")
+        if not command_cwd.exists() or not command_cwd.is_dir():
+            return CommandExecResult(False, 127, "", f"命令工作目录无效: {command_cwd}")
+
+        shell_command = f"set -eu; cd {shlex.quote(command_cwd.as_posix())}; {command}"
         try:
             proc = subprocess.run(
                 [sandbox_exec, "-p", self._profile(), "/bin/sh", "-lc", shell_command],
-                cwd=self.project_root,
+                cwd=command_cwd,
                 capture_output=True,
                 text=True,
                 timeout=timeout_seconds or self.timeout_seconds,

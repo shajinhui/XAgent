@@ -1,8 +1,15 @@
-import { contextBridge } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 
 // Custom APIs for renderer
-const api = {}
+const api = {
+  openWorkspaceDirectory(defaultPath?: string): Promise<string | null> {
+    return ipcRenderer.invoke('workspace:select-directory', defaultPath)
+  },
+  createDefaultChatDirectory(): Promise<string> {
+    return ipcRenderer.invoke('workspace:create-default-chat-directory')
+  }
+}
 
 // Use `contextBridge` APIs to expose Electron APIs to
 // renderer only if context isolation is enabled, otherwise

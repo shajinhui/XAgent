@@ -15,6 +15,7 @@ from langgraph.graph import END, START, StateGraph
 from session import SessionRecord, SessionStore, TranscriptEvent, recover_session_messages
 from tools.registry import ToolRegistry
 from tools.types import ToolResult
+from workspace import WorkspaceContext, WorkspaceManager, WorkspaceValidationError
 
 try:
     from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -30,6 +31,42 @@ class AgentState(TypedDict):
 
 EVENT_SCHEMA_VERSION = "2026-05-05"
 CONVERSATION_TITLE_MODEL_SOURCE = "model-first-user"
+DEFAULT_MODEL_OPTIONS = (
+    "openai/gpt-4o-mini",
+    "deepseek/deepseek-chat",
+    "deepseek/deepseek-reasoner",
+)
+REASONING_EFFORT_OPTIONS = ("off", "low", "medium", "high")
+REASONING_EFFORT_ALIASES = {
+    "": "off",
+    "none": "off",
+    "disabled": "off",
+    "false": "off",
+    "0": "off",
+    "minimal": "low",
+    "normal": "medium",
+}
+
+
+@dataclass(frozen=True)
+class ModelRequestConfig:
+    model: str
+    reasoning_effort: str = "off"
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "model": self.model,
+            "reasoning_effort": self.reasoning_effort,
+        }
+
+    def completion_kwargs(self) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {
+            "model": self.model,
+            "temperature": 0,
+        }
+        if self.reasoning_effort != "off":
+            kwargs["reasoning_effort"] = self.reasoning_effort
+        return kwargs
 
 
 @dataclass
@@ -188,10 +225,76 @@ def _last_model_message_timestamp(events: List[TranscriptEvent]) -> float | None
     return None
 
 
-def build_model_name() -> str:
+def normalize_model_name(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+
+    model = value.strip()
+    if not model or len(model) > 160:
+        return None
+    if any(char.isspace() for char in model):
+        return None
+    if "/" not in model:
+        return None
+    return model
+
+
+def build_default_model_name() -> str:
     provider = os.getenv("MODEL_PROVIDER", "openai").strip()
     model = os.getenv("MODEL_NAME", "gpt-4o-mini").strip()
     return f"{provider}/{model}"
+
+
+def build_model_name(model_override: Any | None = None) -> str:
+    return normalize_model_name(model_override) or build_default_model_name()
+
+
+def normalize_reasoning_effort(value: Any) -> str:
+    if value is None:
+        value = os.getenv("REASONING_EFFORT", "off")
+    if not isinstance(value, str):
+        return "off"
+
+    effort = value.strip().lower()
+    effort = REASONING_EFFORT_ALIASES.get(effort, effort)
+    if effort in REASONING_EFFORT_OPTIONS:
+        return effort
+    return "off"
+
+
+def _parse_model_option_list(raw_value: str) -> List[str]:
+    options: List[str] = []
+    for item in raw_value.split(","):
+        model = normalize_model_name(item)
+        if model and model not in options:
+            options.append(model)
+    return options
+
+
+def build_model_options() -> List[str]:
+    options = [
+        build_default_model_name(),
+        *_parse_model_option_list(os.getenv("MODEL_OPTIONS", "")),
+        *DEFAULT_MODEL_OPTIONS,
+    ]
+    return list(dict.fromkeys(option for option in options if normalize_model_name(option)))
+
+
+def build_model_request_config(packet: Dict[str, Any] | None = None) -> ModelRequestConfig:
+    packet = packet or {}
+    return ModelRequestConfig(
+        model=build_model_name(packet.get("model")),
+        reasoning_effort=normalize_reasoning_effort(packet.get("reasoning_effort")),
+    )
+
+
+def build_model_config_payload() -> Dict[str, Any]:
+    return {
+        "default_model": build_default_model_name(),
+        "model_options": build_model_options(),
+        "reasoning_effort": normalize_reasoning_effort(None),
+        "reasoning_effort_options": list(REASONING_EFFORT_OPTIONS),
+    }
 
 
 def build_system_prompt() -> str:
@@ -203,19 +306,23 @@ def build_system_prompt() -> str:
 
 
 def create_websocket_session(
-    session_store: SessionStore,
-    project_root: Path,
+    workspace: WorkspaceContext,
     system_prompt: str,
 ) -> tuple[str, SessionRuntimeState, ToolRegistry, List[Dict[str, Any]]]:
+    if workspace.session_store is None:
+        raise ValueError("workspace session store is not initialized")
+
+    session_store = workspace.session_store
     session_record = session_store.create_session(
         metadata={
             "transport": "websocket",
             "schema_version": EVENT_SCHEMA_VERSION,
+            "workspace": workspace.as_dict(),
         },
     )
     session_id = session_record.session_id
     session_state = SessionRuntimeState(session_id=session_id)
-    registry = ToolRegistry(project_root=project_root, session_id=session_id)
+    registry = ToolRegistry(project_root=workspace.root, session_id=session_id)
     messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
     return session_id, session_state, registry, messages
 
@@ -356,8 +463,11 @@ def generate_conversation_title(
         ],
         temperature=0,
         max_tokens=32,
+        extra_body={"thinking": {"type": "disabled"}},
     )
     title = sanitize_conversation_title(extract_completion_text(response))
+    if title == "新对话":
+        raise ValueError("conversation title model returned an empty title")
     return title, CONVERSATION_TITLE_MODEL_SOURCE
 
 
@@ -497,15 +607,15 @@ if app is not None:
         messages: List[Dict[str, Any]],
         session_id: str,
         turn_id: str,
+        model_config: ModelRequestConfig,
     ) -> Dict[str, Any]:
         from litellm import completion
 
         stream = completion(
-            model=build_model_name(),
+            **model_config.completion_kwargs(),
             messages=messages,
             tools=registry.schemas(),
             tool_choice="auto",
-            temperature=0,
             stream=True,
         )
 
@@ -649,9 +759,17 @@ if app is not None:
         session_state: SessionRuntimeState,
         session_id: str,
         turn_id: str,
+        model_config: ModelRequestConfig,
     ) -> List[Dict[str, Any]]:
         while True:
-            message = await stream_model_message(ws, registry, messages, session_id, turn_id)
+            message = await stream_model_message(
+                ws,
+                registry,
+                messages,
+                session_id,
+                turn_id,
+                model_config,
+            )
             messages.append(message)
             record_transcript_event(
                 session_store,
@@ -789,12 +907,14 @@ if app is not None:
         await ws.accept()
         load_dotenv()
 
-        project_root = Path(__file__).resolve().parents[1]
-        session_store = SessionStore(project_root=project_root)
+        workspace_manager = WorkspaceManager(Path(__file__).resolve().parents[1])
+        workspace = workspace_manager.open()
+        session_store = workspace.session_store
+        if session_store is None:
+            raise RuntimeError("workspace session store is not initialized")
         system_prompt = build_system_prompt()
         session_id, session_state, registry, messages = create_websocket_session(
-            session_store,
-            project_root,
+            workspace,
             system_prompt,
         )
 
@@ -806,6 +926,8 @@ if app is not None:
                 "path": "/agent/ws",
                 "tools": registry.metadata(),
                 "session_state": session_state.as_dict(),
+                "workspace": workspace.as_dict(),
+                "model_config": build_model_config_payload(),
             }
         )
 
@@ -836,11 +958,100 @@ if app is not None:
                     continue
 
                 packet_type = packet.get("type")
+                if packet_type == "open_workspace":
+                    request_id = packet.get("request_id") or str(uuid.uuid4())
+                    requested_path = str(packet.get("path") or "").strip()
+                    if not requested_path:
+                        record_transcript_event(
+                            session_store,
+                            session_id,
+                            "runtime_error",
+                            {
+                                "turn_id": packet.get("turn_id") or "system",
+                                "request_id": request_id,
+                                "message": "workspace path is empty",
+                            },
+                        )
+                        await ws.send_json(
+                            build_event(
+                                "error",
+                                session_id,
+                                packet.get("turn_id") or "system",
+                                request_id=request_id,
+                                message="workspace path is empty",
+                            )
+                        )
+                        continue
+
+                    try:
+                        next_workspace = workspace_manager.open(requested_path)
+                    except WorkspaceValidationError as exc:
+                        record_transcript_event(
+                            session_store,
+                            session_id,
+                            "runtime_error",
+                            {
+                                "turn_id": packet.get("turn_id") or "system",
+                                "request_id": request_id,
+                                "message": str(exc),
+                                "requested_workspace": requested_path,
+                            },
+                        )
+                        await ws.send_json(
+                            build_event(
+                                "workspace_error",
+                                session_id,
+                                packet.get("turn_id") or "system",
+                                request_id=request_id,
+                                message=str(exc),
+                                requested_workspace=requested_path,
+                                workspace=workspace.as_dict(),
+                            )
+                        )
+                        continue
+
+                    previous_workspace = workspace.as_dict()
+                    previous_state = session_state.as_dict()
+                    workspace = next_workspace
+                    session_store = workspace.session_store
+                    if session_store is None:
+                        raise RuntimeError("workspace session store is not initialized")
+                    session_id, session_state, registry, messages = create_websocket_session(
+                        workspace,
+                        system_prompt,
+                    )
+                    record_transcript_event(
+                        session_store,
+                        session_id,
+                        "workspace_opened",
+                        {
+                            "turn_id": packet.get("turn_id") or "system",
+                            "request_id": request_id,
+                            "previous_workspace": previous_workspace,
+                            "workspace": workspace.as_dict(),
+                            "previous_state": previous_state,
+                            "session_state": session_state.as_dict(),
+                        },
+                    )
+                    await ws.send_json(
+                        build_event(
+                            "workspace_changed",
+                            session_id,
+                            packet.get("turn_id") or "system",
+                            request_id=request_id,
+                            previous_workspace=previous_workspace,
+                            workspace=workspace.as_dict(),
+                            previous_state=previous_state,
+                            session_state=session_state.as_dict(),
+                            tools=registry.metadata(),
+                        )
+                    )
+                    continue
+
                 if packet_type == "new_session":
                     previous_state = session_state.as_dict()
                     session_id, session_state, registry, messages = create_websocket_session(
-                        session_store,
-                        project_root,
+                        workspace,
                         system_prompt,
                     )
                     await ws.send_json(
@@ -851,6 +1062,7 @@ if app is not None:
                             request_id=packet.get("request_id") or str(uuid.uuid4()),
                             previous_state=previous_state,
                             session_state=session_state.as_dict(),
+                            workspace=workspace.as_dict(),
                         )
                     )
                     continue
@@ -869,6 +1081,87 @@ if app is not None:
                             session_id,
                             packet.get("turn_id") or "system",
                             request_id=packet.get("request_id") or str(uuid.uuid4()),
+                            sessions=sessions,
+                            workspace=workspace.as_dict(),
+                        )
+                    )
+                    continue
+
+                if packet_type == "delete_session":
+                    request_id = packet.get("request_id") or str(uuid.uuid4())
+                    target_session_id = str(packet.get("session_id") or "").strip()
+                    requested_workspace = str(packet.get("workspace_path") or "").strip()
+
+                    if not target_session_id:
+                        await ws.send_json(
+                            build_event(
+                                "error",
+                                session_id,
+                                packet.get("turn_id") or "system",
+                                request_id=request_id,
+                                message="session_id is required",
+                            )
+                        )
+                        continue
+
+                    if requested_workspace:
+                        try:
+                            target_workspace = workspace_manager.open(requested_workspace)
+                        except WorkspaceValidationError as exc:
+                            await ws.send_json(
+                                build_event(
+                                    "workspace_error",
+                                    session_id,
+                                    packet.get("turn_id") or "system",
+                                    request_id=request_id,
+                                    message=str(exc),
+                                    requested_workspace=requested_workspace,
+                                    workspace=workspace.as_dict(),
+                                )
+                            )
+                            continue
+                    else:
+                        target_workspace = workspace
+
+                    target_store = target_workspace.session_store
+                    if target_store is None:
+                        raise RuntimeError("workspace session store is not initialized")
+
+                    try:
+                        target_store.delete_session(target_session_id)
+                    except KeyError:
+                        await ws.send_json(
+                            build_event(
+                                "error",
+                                session_id,
+                                packet.get("turn_id") or "system",
+                                request_id=request_id,
+                                message=f"unknown session: {target_session_id}",
+                                requested_session_id=target_session_id,
+                            )
+                        )
+                        continue
+
+                    deleted_current = (
+                        target_workspace.root == workspace.root and target_session_id == session_id
+                    )
+                    if deleted_current:
+                        session_id, session_state, registry, messages = create_websocket_session(
+                            workspace,
+                            system_prompt,
+                        )
+
+                    sessions = list_session_summaries(target_store, limit=30)
+                    await ws.send_json(
+                        build_event(
+                            "session_deleted",
+                            session_id,
+                            packet.get("turn_id") or "system",
+                            request_id=request_id,
+                            deleted_session_id=target_session_id,
+                            deleted_current=deleted_current,
+                            session_state=session_state.as_dict(),
+                            workspace=target_workspace.as_dict(),
                             sessions=sessions,
                         )
                     )
@@ -910,7 +1203,7 @@ if app is not None:
 
                         session_id = target_session_id
                         session_state = SessionRuntimeState(session_id=session_id)
-                        registry = ToolRegistry(project_root=project_root, session_id=session_id)
+                        registry = ToolRegistry(project_root=workspace.root, session_id=session_id)
                         display_messages = session_display_messages(target_events)
                         session_summary = summarize_session_record(target_record, target_events)
                         resumed_from_disk = True
@@ -945,6 +1238,7 @@ if app is not None:
                             message_count=len(messages),
                             messages=display_messages,
                             session=session_summary,
+                            workspace=workspace.as_dict(),
                         )
                     )
                     continue
@@ -1088,6 +1382,7 @@ if app is not None:
                     )
                     continue
 
+                model_config = build_model_request_config(packet)
                 clear_historical_reasoning_content(messages)
                 messages.append({"role": "user", "content": user_text})
                 turn_id = str(uuid.uuid4())
@@ -1098,6 +1393,7 @@ if app is not None:
                     {
                         "turn_id": turn_id,
                         "content": user_text,
+                        "model_config": model_config.as_dict(),
                     },
                 )
                 record_transcript_event(
@@ -1107,6 +1403,7 @@ if app is not None:
                     {
                         "turn_id": turn_id,
                         "session_state": session_state.as_dict(),
+                        "model_config": model_config.as_dict(),
                     },
                 )
                 await ws.send_json(
@@ -1115,6 +1412,7 @@ if app is not None:
                         session_id,
                         turn_id,
                         session_state=session_state.as_dict(),
+                        model_config=model_config.as_dict(),
                     )
                 )
 
@@ -1127,6 +1425,7 @@ if app is not None:
                         session_state,
                         session_id,
                         turn_id,
+                        model_config,
                     )
                 except Exception as exc:
                     record_transcript_event(

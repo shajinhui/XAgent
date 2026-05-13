@@ -69,6 +69,20 @@ class SessionStoreTests(unittest.TestCase):
             with self.assertRaises(KeyError):
                 store.load_events("missing")
 
+    def test_delete_session_removes_index_and_transcript(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SessionStore(Path(tmp))
+            record = store.create_session(session_id="delete-me")
+            store.append_event(record.session_id, "user_message", {"content": "remove"})
+
+            deleted = store.delete_session(record.session_id)
+
+            self.assertEqual(deleted.session_id, record.session_id)
+            self.assertFalse(record.transcript_path.exists())
+            self.assertEqual(store.list_sessions(), [])
+            with self.assertRaises(KeyError):
+                store.get_session(record.session_id)
+
 
 class TranscriptWriterTests(unittest.TestCase):
     def test_transcript_writer_round_trips_jsonl_events(self) -> None:

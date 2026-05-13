@@ -27,6 +27,39 @@ class SecurityPolicyTests(unittest.TestCase):
             with self.assertRaises(PermissionError):
                 policy.ensure_writable_path(root / ".git" / "config")
 
+    def test_resolve_command_cwd_accepts_workspace_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            nested = root / "desktop"
+            nested.mkdir()
+            policy = SecurityPolicy(root)
+
+            self.assertEqual(policy.resolve_command_cwd("desktop"), nested.resolve())
+            self.assertEqual(policy.resolve_command_cwd(nested.as_posix()), nested.resolve())
+            self.assertEqual(policy.resolve_command_cwd(None), root.resolve())
+
+    def test_resolve_command_cwd_rejects_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            policy = SecurityPolicy(root)
+
+            with self.assertRaises(ValueError):
+                policy.resolve_command_cwd("..")
+
+    def test_resolve_command_cwd_rejects_file_and_protected_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            policy = SecurityPolicy(root)
+            file_path = root / "notes.txt"
+            file_path.write_text("hello", encoding="utf-8")
+            (root / ".git").mkdir()
+
+            with self.assertRaises(ValueError):
+                policy.resolve_command_cwd("notes.txt")
+
+            with self.assertRaises(PermissionError):
+                policy.resolve_command_cwd(".git")
+
     def test_check_command_denies_dangerous_patterns(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             policy = SecurityPolicy(Path(tmp))

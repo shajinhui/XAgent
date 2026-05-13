@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from session import SessionStore
 from session.models import SessionRecord, TranscriptEvent
@@ -12,6 +14,10 @@ from server.app import (
     assistant_transcript_payload,
     build_assistant_message,
     build_event,
+    build_model_config_payload,
+    build_model_name,
+    build_model_options,
+    build_model_request_config,
     denied_tool_result,
     generate_conversation_title,
     list_session_summaries,
@@ -332,6 +338,16 @@ class ServerEventTests(unittest.TestCase):
         self.assertEqual(title, "模型标题输出需要清洗并截断很长很长很...")
         self.assertEqual(source, "model-first-user")
 
+    def test_conversation_title_rejects_empty_model_output(self) -> None:
+        def fake_completion(**kwargs):
+            return {"choices": [{"message": {"content": "   "}}]}
+
+        with self.assertRaises(ValueError):
+            generate_conversation_title(
+                [{"role": "user", "content": "帮我修复标题生成逻辑"}],
+                completion_fn=fake_completion,
+            )
+
     def test_conversation_title_defaults_when_no_user_message(self) -> None:
         title, source = generate_conversation_title(
             [{"role": "assistant", "content": "欢迎使用"}]
@@ -339,6 +355,50 @@ class ServerEventTests(unittest.TestCase):
 
         self.assertEqual(title, "新对话")
         self.assertEqual(source, "model-first-user")
+
+    def test_model_name_can_be_overridden_per_request(self) -> None:
+        with patch.dict(os.environ, {"MODEL_PROVIDER": "deepseek", "MODEL_NAME": "deepseek-chat"}):
+            self.assertEqual(build_model_name(), "deepseek/deepseek-chat")
+            self.assertEqual(build_model_name("openai/gpt-4o-mini"), "openai/gpt-4o-mini")
+            self.assertEqual(build_model_name("bad value"), "deepseek/deepseek-chat")
+
+    def test_model_request_config_adds_reasoning_effort_only_when_enabled(self) -> None:
+        disabled = build_model_request_config(
+            {
+                "model": "deepseek/deepseek-chat",
+                "reasoning_effort": "off",
+            }
+        )
+        enabled = build_model_request_config(
+            {
+                "model": "deepseek/deepseek-reasoner",
+                "reasoning_effort": "high",
+            }
+        )
+
+        self.assertEqual(disabled.model, "deepseek/deepseek-chat")
+        self.assertEqual(disabled.reasoning_effort, "off")
+        self.assertNotIn("reasoning_effort", disabled.completion_kwargs())
+        self.assertEqual(enabled.completion_kwargs()["reasoning_effort"], "high")
+
+    def test_model_config_payload_includes_env_default_and_configured_options(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "MODEL_PROVIDER": "deepseek",
+                "MODEL_NAME": "deepseek-chat",
+                "MODEL_OPTIONS": "openai/gpt-4o-mini,deepseek/deepseek-reasoner",
+                "REASONING_EFFORT": "medium",
+            },
+        ):
+            options = build_model_options()
+            payload = build_model_config_payload()
+
+        self.assertEqual(options[0], "deepseek/deepseek-chat")
+        self.assertIn("openai/gpt-4o-mini", options)
+        self.assertEqual(payload["default_model"], "deepseek/deepseek-chat")
+        self.assertEqual(payload["reasoning_effort"], "medium")
+        self.assertEqual(payload["reasoning_effort_options"], ["off", "low", "medium", "high"])
 
 
 if __name__ == "__main__":
