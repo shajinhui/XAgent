@@ -8,6 +8,7 @@ from pathlib import Path
 from sandbox.macos_executor import SecureMacOSSandboxExecutor
 from security.circuit_breaker import CircuitBreaker
 from security.policy import SecurityPolicy
+from tools.core.context import ToolInvocation
 from tools.core.registry import ToolRegistry
 from tools.core.types import ToolExecutionContext, ToolPermissionError, ToolResult
 
@@ -29,6 +30,17 @@ class ToolRunner:
     def __init__(self, registry: ToolRegistry, ctx: ToolExecutionContext) -> None:
         self.registry = registry
         self.ctx = ctx
+
+    def execute_invocation(
+        self,
+        invocation: ToolInvocation,
+        approved: bool | None = None,
+    ) -> ToolResult:
+        is_approved = invocation.approval.approved if approved is None else approved
+        result = self.execute(invocation.name, invocation.arguments, approved=is_approved)
+        if result.ok:
+            self._record_invocation_diff(invocation)
+        return result
 
     def execute(self, name: str, arguments: str, approved: bool = False) -> ToolResult:
         tool = self.registry.get(name)
@@ -84,3 +96,22 @@ class ToolRunner:
                 content=f"工具执行失败: {exc}",
                 metadata={"tool": name, "error_type": "runtime_error"},
             )
+
+    def _record_invocation_diff(self, invocation: ToolInvocation) -> None:
+        tool = self.registry.get(invocation.name)
+        if tool is None or not tool.meta.is_mutating:
+            return
+
+        try:
+            payload = json.loads(invocation.arguments or "{}")
+        except json.JSONDecodeError:
+            return
+
+        root = invocation.workspace_root or self.ctx.project_root
+        for key in ("path", "cwd"):
+            raw_path = payload.get(key)
+            if isinstance(raw_path, str) and raw_path.strip():
+                path = Path(raw_path)
+                if not path.is_absolute():
+                    path = root / path
+                invocation.diff_tracker.record_path(path.resolve())

@@ -54,7 +54,8 @@ python agent_loop.py
 ## 项目结构
 
 - `agent_loop.py`：终端版 Agent 主循环（LangGraph 条件循环）
-- `tools/registry.py`：工具系统兼容门面
+- `context/`：模型可见上下文片段（环境、权限、模型、用户输入）
+- `context_manager/`：模型历史上下文管理与截断 helpers
 - `tools/core/`：工具协议、纯注册表、路由、执行器、默认目录和共享类型
 - `tools/filesystem/`：读文件、写文件、按行编辑工具
 - `tools/search/`：代码搜索工具（rg/grep）
@@ -64,7 +65,7 @@ python agent_loop.py
 - `security/`：路径校验、命令白名单、熔断器
 - `sandbox/macos_executor.py`：macOS Seatbelt 安全执行器
 - `server/app.py`：FastAPI WebSocket 服务（`/agent/ws`）
-- `session/`：SQLite 会话索引、JSONL transcript、历史会话恢复
+- `session/`：SQLite 会话索引、JSONL transcript、历史会话恢复和单轮 `TurnContext`
 - `desktop/`：Electron + Vue + TypeScript 桌面客户端壳
 - `pyproject.toml`：项目元信息与依赖（标准 Python 项目配置）
 - `Makefile`：标准化开发命令入口

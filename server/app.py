@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, TypedDict
+from typing import TYPE_CHECKING, Any, Dict, List, TypedDict
 
 from dotenv import load_dotenv
 from langgraph.graph import END, START, StateGraph
@@ -23,24 +23,28 @@ from server.runtime.model_config import (
     build_model_request_config,
     normalize_reasoning_effort,
 )
-from server.runtime.model_stream import clear_historical_reasoning_content
 from server.runtime.session_state import persist_websocket_session
 from server.runtime.transcript_events import record_transcript_event
 from server.runtime.turn_runner import run_turn
 from server.runtime.websocket_context import WebSocketRuntimeContext
+from session.turn_context import TurnContext
+from tools.core.registry import ToolRegistry
 from tools.core.router import ToolRouter
-from tools.registry import ToolRegistry
+from tools.core.runner import ToolRunner
 
 try:
-    from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+    from fastapi import FastAPI
+    from fastapi import WebSocket as FastAPIWebSocket
+    from fastapi import WebSocketDisconnect
 except ModuleNotFoundError:  # pragma: no cover
     FastAPI = None  # type: ignore[assignment]
-    WebSocket = None  # type: ignore[assignment]
+    if not TYPE_CHECKING:
+        FastAPIWebSocket = Any
     WebSocketDisconnect = Exception  # type: ignore[assignment]
 
 
 class AgentState(TypedDict):
-    """CLI/LangGraph 兼容路径使用的最小状态。"""
+    """CLI/LangGraph 路径使用的最小状态。"""
 
     messages: List[Dict[str, Any]]
 
@@ -57,17 +61,17 @@ def build_system_prompt() -> str:
     )
 
 
-def build_graph(registry: ToolRegistry):
+def build_graph(registry: ToolRegistry, runner: ToolRunner):
     """构建旧 CLI 路径使用的 LangGraph 图。
 
-    WebSocket 主路径已经拆到 runtime/turn_runner.py；这里保留是为了兼容
-    现有 CLI 入口和早期测试，不承载桌面客户端协议逻辑。
+    WebSocket 主路径已经拆到 runtime/turn_runner.py；这里仅用于
+    CLI 入口和早期测试，不承载桌面客户端协议逻辑。
     """
 
     def call_model(state: AgentState) -> AgentState:
         from litellm import completion
 
-        response = completion(
+        response: Any = completion(
             **ModelRequestConfig(
                 model=build_model_name(),
                 reasoning_effort=normalize_reasoning_effort(None),
@@ -90,7 +94,7 @@ def build_graph(registry: ToolRegistry):
         new_messages = list(state["messages"])
         for tool_call in last.get("tool_calls", []):
             invocation = ToolRouter.build_tool_invocation(tool_call)
-            result = registry.execute(
+            result = runner.execute(
                 name=invocation.name,
                 arguments=invocation.arguments,
             )
@@ -123,7 +127,7 @@ else:  # pragma: no cover
 if app is not None:
 
     @app.websocket("/agent/ws")
-    async def agent_ws(ws: WebSocket) -> None:
+    async def agent_ws(ws: FastAPIWebSocket) -> None:
         """桌面客户端连接的 WebSocket runtime 入口。"""
 
         await ws.accept()
@@ -217,10 +221,22 @@ if app is not None:
                     )
                     context.session_persisted = True
                 # 普通 assistant 推理内容不参与下一轮上下文；带 tool_calls 的 reasoning
-                # 仍保留在内存中以兼容 DeepSeek 的工具调用拼接要求。
-                clear_historical_reasoning_content(context.messages)
-                context.messages.append({"role": "user", "content": user_text})
+                # 仍保留在内存中以兼容 DeepSeek 的工具调用后的上下文拼接要求。
+                context.history.clear_historical_reasoning_content()
+                context.history.append_user_message(user_text)
                 turn_id = str(uuid.uuid4())
+                turn_context = TurnContext.from_runtime(
+                    session_id=context.session_id,
+                    turn_id=turn_id,
+                    workspace=context.workspace,
+                    session_state=context.session_state,
+                    registry=context.registry,
+                    runner=context.runner,
+                    history=context.history,
+                    system_prompt=context.system_prompt,
+                    user_input=user_text,
+                    model_config=model_config,
+                )
                 record_transcript_event(
                     context.session_store,
                     context.session_id,
@@ -252,15 +268,10 @@ if app is not None:
                 )
 
                 try:
-                    context.messages = await run_turn(
+                    context.history = await run_turn(
                         ws,
                         context.session_store,
-                        context.registry,
-                        context.messages,
-                        context.session_state,
-                        context.session_id,
-                        turn_id,
-                        model_config,
+                        turn_context,
                     )
                 except Exception as exc:
                     record_transcript_event(

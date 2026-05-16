@@ -23,9 +23,11 @@ from server.runtime.transcript_events import (
     denied_tool_result,
     record_transcript_event,
 )
+from context_manager import ContextManager
 from session import SessionStore
+from session.turn_context import TurnContext
+from tools.core.registry import ToolRegistry
 from tools.core.router import ToolRouter
-from tools.registry import ToolRegistry
 from tools.core.types import ToolResult
 
 
@@ -312,25 +314,28 @@ async def emit_tool_result(
 async def run_turn(
     ws: Any,
     session_store: SessionStore,
-    registry: ToolRegistry,
-    messages: List[Dict[str, Any]],
-    session_state: SessionRuntimeState,
-    session_id: str,
-    turn_id: str,
-    model_config: ModelRequestConfig,
-) -> List[Dict[str, Any]]:
+    turn_context: TurnContext,
+) -> ContextManager:
     """执行一次完整模型回合，直到模型给出最终回答或会话被挂起。"""
+
+    session_id = turn_context.session_id
+    turn_id = turn_context.turn_id
+    registry = turn_context.registry
+    runner = turn_context.runner
+    history = turn_context.history
+    session_state: SessionRuntimeState = turn_context.session_state
+    model_config: ModelRequestConfig = turn_context.model.request_config
 
     while True:
         message = await stream_model_message(
             ws,
             registry,
-            messages,
+            history.messages,
             session_id,
             turn_id,
             model_config,
         )
-        messages.append(message)
+        history.append_assistant_message(message)
         record_transcript_event(
             session_store,
             session_id,
@@ -340,11 +345,11 @@ async def run_turn(
 
         tool_calls = message.get("tool_calls") or []
         if not tool_calls:
-            return messages
+            return history
 
         # 模型可能一次返回多个工具调用；当前按顺序执行，便于权限和 transcript 对齐。
         for tool_call in tool_calls:
-            invocation = ToolRouter.build_tool_invocation(tool_call)
+            invocation = ToolRouter.build_tool_invocation(tool_call, turn_context)
             tool_name = invocation.name
             arguments = invocation.arguments
             request_id = invocation.call_id
@@ -370,7 +375,7 @@ async def run_turn(
                 )
             )
 
-            result = registry.execute(name=tool_name, arguments=arguments)
+            result = runner.execute_invocation(invocation)
             metadata = result.metadata or {}
             if metadata.get("user_interaction_action") == "ask":
                 result = await request_user_clarification(
@@ -440,10 +445,8 @@ async def run_turn(
                 )
                 if approved:
                     # 用户批准后带 _approved 重试同一个工具调用。
-                    result = registry.execute(
-                        name=tool_name,
-                        arguments=arguments,
-                        approved=True,
+                    result = runner.execute_invocation(
+                        invocation.with_approval(True, user_feedback),
                     )
                     metadata = result.metadata or {}
                 else:
@@ -467,16 +470,9 @@ async def run_turn(
             )
 
             content = result.content if result.ok else f"[ERROR] {result.content}"
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": request_id,
-                    "name": tool_name,
-                    "content": content,
-                }
-            )
+            history.append_tool_result(request_id, tool_name, content)
             if session_state.suspended:
-                return messages
+                return history
 
 
 def _normalize_clarification_response(response: Dict[str, Any]) -> Dict[str, Any]:

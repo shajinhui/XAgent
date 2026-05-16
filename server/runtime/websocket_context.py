@@ -10,10 +10,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List
 
+from context_manager import ContextManager
 from session import SessionStore, recover_session_messages
 from server.runtime.session_state import SessionRuntimeState, create_websocket_session
 from server.views.session_summary import session_display_messages, summarize_session_record
-from tools.registry import ToolRegistry
+from tools.core.catalog import build_default_registry
+from tools.core.registry import ToolRegistry
+from tools.core.runner import ToolRunner, create_tool_context
 from workspace import WorkspaceContext, WorkspaceManager
 
 
@@ -28,8 +31,17 @@ class WebSocketRuntimeContext:
     session_id: str
     session_state: SessionRuntimeState
     registry: ToolRegistry
-    messages: List[Dict[str, Any]]
+    runner: ToolRunner
+    history: ContextManager
     session_persisted: bool = False
+
+    @property
+    def messages(self) -> List[Dict[str, Any]]:
+        return self.history.messages
+
+    @messages.setter
+    def messages(self, messages: List[Dict[str, Any]]) -> None:
+        self.history = ContextManager.from_messages(messages)
 
     @classmethod
     def create(cls, project_root: Path, system_prompt: str) -> "WebSocketRuntimeContext":
@@ -38,7 +50,7 @@ class WebSocketRuntimeContext:
         workspace_manager = WorkspaceManager(project_root)
         workspace = workspace_manager.open()
         session_store = _require_session_store(workspace)
-        session_id, session_state, registry, messages = create_websocket_session(
+        session_id, session_state, registry, runner, history = create_websocket_session(
             workspace,
             system_prompt,
         )
@@ -50,14 +62,15 @@ class WebSocketRuntimeContext:
             session_id=session_id,
             session_state=session_state,
             registry=registry,
-            messages=messages,
+            runner=runner,
+            history=history,
         )
 
     def start_new_session(self) -> Dict[str, Any]:
         """切到新的空内存会话，并返回切换前的 session_state。"""
 
         previous_state = self.session_state.as_dict()
-        self.session_id, self.session_state, self.registry, self.messages = (
+        self.session_id, self.session_state, self.registry, self.runner, self.history = (
             create_websocket_session(self.workspace, self.system_prompt)
         )
         self.session_persisted = False
@@ -70,7 +83,7 @@ class WebSocketRuntimeContext:
         previous_state = self.session_state.as_dict()
         self.workspace = self.workspace_manager.open(path)
         self.session_store = _require_session_store(self.workspace)
-        self.session_id, self.session_state, self.registry, self.messages = (
+        self.session_id, self.session_state, self.registry, self.runner, self.history = (
             create_websocket_session(self.workspace, self.system_prompt)
         )
         self.session_persisted = False
@@ -79,16 +92,22 @@ class WebSocketRuntimeContext:
     def resume_session_from_disk(self, session_id: str) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """从 transcript 恢复模型上下文，并返回前端可展示的消息和摘要。"""
 
-        self.messages = recover_session_messages(
-            self.session_store,
-            session_id,
-            self.system_prompt,
+        self.history = ContextManager.from_messages(
+            recover_session_messages(
+                self.session_store,
+                session_id,
+                self.system_prompt,
+            )
         )
         target_record = self.session_store.get_session(session_id)
         target_events = self.session_store.load_events(session_id)
         self.session_id = session_id
         self.session_state = SessionRuntimeState(session_id=session_id)
-        self.registry = ToolRegistry(project_root=self.workspace.root, session_id=session_id)
+        self.registry = build_default_registry()
+        self.runner = ToolRunner(
+            self.registry,
+            create_tool_context(self.workspace.root, session_id),
+        )
         self.session_persisted = True
         return (
             session_display_messages(target_events),

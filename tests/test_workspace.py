@@ -65,14 +65,15 @@ class WorkspaceValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = WorkspaceManager(Path(tmp)).open()
 
-            session_id, session_state, registry, messages = create_websocket_session(
+            session_id, session_state, registry, runner, history = create_websocket_session(
                 workspace,
                 build_system_prompt(),
             )
 
             self.assertEqual(session_state.session_id, session_id)
-            self.assertEqual(registry.ctx.project_root, workspace.root)
-            self.assertEqual(messages[0]["role"], "system")
+            self.assertTrue(registry.has_tool("read_file"))
+            self.assertEqual(runner.ctx.project_root, workspace.root)
+            self.assertEqual(history.messages[0]["role"], "system")
             self.assertIsNotNone(workspace.session_store)
             assert workspace.session_store is not None
 

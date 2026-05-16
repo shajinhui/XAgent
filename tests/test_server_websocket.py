@@ -45,22 +45,17 @@ class ServerWebSocketTests(unittest.TestCase):
         async def fake_run_turn(
             ws,
             session_store,
-            registry,
-            messages,
-            session_state,
-            session_id,
-            turn_id,
-            model_config,
+            turn_context,
         ):
             assistant = {"role": "assistant", "content": "pong"}
-            messages.append(assistant)
+            turn_context.history.append_assistant_message(assistant)
             record_transcript_event(
                 session_store,
-                session_id,
+                turn_context.session_id,
                 "assistant_message",
-                assistant_transcript_payload(assistant, turn_id),
+                assistant_transcript_payload(assistant, turn_context.turn_id),
             )
-            return messages
+            return turn_context.history
 
         with tempfile.TemporaryDirectory() as tmp:
             contexts = []

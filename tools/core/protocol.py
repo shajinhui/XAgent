@@ -15,7 +15,9 @@ SchemaProvider = Callable[[], dict]
 class Tool(Protocol):
     """registry/runner 共同依赖的最小工具接口。"""
 
-    meta: ToolMeta
+    @property
+    def meta(self) -> ToolMeta:
+        """工具能力元信息。"""
 
     def schema(self) -> dict:
         """返回模型可见的 tool schema。"""

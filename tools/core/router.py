@@ -2,22 +2,19 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
-
-@dataclass(frozen=True)
-class ToolInvocation:
-    name: str
-    arguments: str
-    call_id: str
+from tools.core.context import ToolInvocation
 
 
 class ToolRouter:
     """把 OpenAI/LiteLLM 风格 tool_call 转为内部 ToolInvocation。"""
 
     @staticmethod
-    def build_tool_invocation(tool_call: dict[str, Any]) -> ToolInvocation:
+    def build_tool_invocation(
+        tool_call: dict[str, Any],
+        turn_context: Any | None = None,
+    ) -> ToolInvocation:
         try:
             fn = tool_call["function"]
             name = str(fn["name"])
@@ -29,4 +26,9 @@ class ToolRouter:
         if not isinstance(arguments, str):
             raise ValueError("tool_call function.arguments must be a JSON string")
 
-        return ToolInvocation(name=name, arguments=arguments, call_id=call_id)
+        return ToolInvocation.from_model_call(
+            name=name,
+            arguments=arguments,
+            call_id=call_id,
+            turn_context=turn_context,
+        )

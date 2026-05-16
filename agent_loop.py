@@ -8,8 +8,10 @@ from dotenv import load_dotenv
 from langgraph.graph import END, START, StateGraph
 from litellm import completion
 
+from tools.core.catalog import build_default_registry
+from tools.core.registry import ToolRegistry
 from tools.core.router import ToolRouter
-from tools.registry import ToolRegistry
+from tools.core.runner import ToolRunner, create_tool_context
 
 
 class AgentState(TypedDict):
@@ -125,12 +127,12 @@ def should_continue(state: AgentState) -> str:
     return "end"
 
 
-def call_tools(state: AgentState, registry: ToolRegistry) -> AgentState:
+def call_tools(state: AgentState, runner: ToolRunner) -> AgentState:
     """执行模型请求的所有工具调用，并把工具输出作为工具消息追加到对话中。
 
     实现细节：
     - 解析最新模型消息中的 `tool_calls` 列表
-    - 对每个调用使用 `registry.execute` 执行（由 ToolRegistry 统一路由）
+    - 对每个调用使用 `ToolRunner.execute` 执行
     - 将每次工具执行的返回结果作为一条 role 为 `tool` 的消息追加，
       并保留 `tool_call_id` 以便模型能将工具输出与先前请求关联
     """
@@ -142,8 +144,8 @@ def call_tools(state: AgentState, registry: ToolRegistry) -> AgentState:
     # 遍历模型发起的所有工具调用（如果没有则不会进入循环）
     for tool_call in last.get("tool_calls", []):
         invocation = ToolRouter.build_tool_invocation(tool_call)
-        # registry.execute 的返回值为 ToolResult(ok, content, metadata)
-        result = registry.execute(name=invocation.name, arguments=invocation.arguments)
+        # runner.execute 的返回值为 ToolResult(ok, content, metadata)
+        result = runner.execute(name=invocation.name, arguments=invocation.arguments)
         ok = result.ok
         content = result.content
         if not ok:
@@ -163,7 +165,7 @@ def call_tools(state: AgentState, registry: ToolRegistry) -> AgentState:
     return {"messages": new_messages}
 
 
-def build_graph(registry: ToolRegistry):
+def build_graph(registry: ToolRegistry, runner: ToolRunner):
     """构建并编译状态机图（StateGraph）。
 
     - model 节点：调用模型（`call_model`）
@@ -173,7 +175,7 @@ def build_graph(registry: ToolRegistry):
 
     graph = StateGraph(AgentState)
     graph.add_node("model", lambda state: call_model(state, registry))
-    graph.add_node("tools", lambda state: call_tools(state, registry))
+    graph.add_node("tools", lambda state: call_tools(state, runner))
     graph.add_edge(START, "model")
     graph.add_conditional_edges(
         "model",
@@ -205,8 +207,9 @@ def main() -> None:
 
     # 构建状态机应用
     project_root = Path(__file__).parent.resolve()
-    registry = ToolRegistry(project_root=project_root)
-    app = build_graph(registry)
+    registry = build_default_registry()
+    runner = ToolRunner(registry, create_tool_context(project_root))
+    app = build_graph(registry, runner)
 
     # 系统提示，模型将以此作为对话背景
     system_prompt = (

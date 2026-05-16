@@ -50,6 +50,8 @@ This file is the shared context for future agent conversations in this repo.
 - `server/processors/request_dispatcher.py`: WebSocket control-packet dispatcher
 - `server/processors/title_processor.py`: low-cost conversation title generation
 - `server/views/session_summary.py`: stored-session summary and display-message projection
+- `context/`: model-visible context fragments for environment, permissions, model, and user input
+- `context_manager/`: model history container and context update/truncation helpers
 - `workspace/models.py`: workspace context types
 - `workspace/validator.py`: safe workspace root validation
 - `workspace/manager.py`: workspace opening and session-store binding
@@ -57,7 +59,7 @@ This file is the shared context for future agent conversations in this repo.
 - `session/store.py`: SQLite session index and transcript access
 - `session/transcript.py`: append-only JSONL transcript writer/reader
 - `session/recovery.py`: rebuild model messages from transcript events
-- `tools/registry.py`: compatibility facade for the tool registry API
+- `session/turn_context.py`: per-turn runtime context passed into tool execution
 - `tools/core/`: tool protocol, pure registry, router, runner, catalog, and shared types
 - `tools/filesystem/`: read/write/edit file tools
 - `tools/search/grep.py`: code search tool

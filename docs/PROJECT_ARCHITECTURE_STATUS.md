@@ -9,7 +9,7 @@ Codex-mini 是一个 Python 版 Codex 类本地 Agent 学习项目，目前正�
 当前状态可以概括为：
 
 - CLI Agent 主流程已经接入新的工具注册与分发机制。
-- 工具层已经从 `tools/toolkit.py` 拆分为多个独立工具模块。
+- 工具层已经拆成 `tools/core/` 核心层和按领域组织的工具包。
 - 安全策略、命令白名单、危险命令拦截和熔断器已经有第一版实现。
 - `run_command` 已改为通过 macOS 原生沙箱在真实项目 workspace 中执行。
 - FastAPI WebSocket 服务已经作为本地事件传输原型接入，但它的最终角色应是桌面客户端/IDE 扩展的 runtime bridge。
@@ -27,13 +27,20 @@ Codex-mini 是一个 Python 版 Codex 类本地 Agent 学习项目，目前正�
 .
 ├── agent_loop.py
 ├── main.py
+├── context/
+│   ├── environment_context.py
+│   ├── permissions_context.py
+│   ├── model_context.py
+│   └── user_context.py
+├── context_manager/
+│   ├── history.py
+│   ├── truncation.py
+│   └── updates.py
 ├── tools/
 │   ├── __init__.py
-│   ├── toolkit.py
-│   ├── types.py
-│   ├── registry.py
 │   ├── core/
 │   │   ├── catalog.py
+│   │   ├── context.py
 │   │   ├── protocol.py
 │   │   ├── registry.py
 │   │   ├── router.py
@@ -87,7 +94,8 @@ Codex-mini 是一个 Python 版 Codex 类本地 Agent 学习项目，目前正�
 │   ├── models.py
 │   ├── store.py
 │   ├── transcript.py
-│   └── recovery.py
+│   ├── recovery.py
+│   └── turn_context.py
 ├── desktop/
 │   └── ...
 ├── tests/
@@ -125,15 +133,15 @@ CLI: agent_loop.py              WebSocket: server/app.py
               LiteLLM completion
                       |
                       v
-              ToolRegistry schemas
+              core registry schemas
                       |
                       v
-              ToolRegistry execute
+              ToolRouter + ToolRunner
                       |
        +--------------+--------------+----------------+
        |              |              |                |
        v              v              v                v
-  tools/*.py   security/policy.py   sandbox/macos_executor.py   session/*.py
+  tools/*      security/policy.py   sandbox/macos_executor.py   context/session
        |              |              |                |
        +--------------+--------------+----------------+
                       |
@@ -155,20 +163,40 @@ CLI 版 Agent 主循环。
 - 加载 `.env`。
 - 根据 `MODEL_PROVIDER` 和 `MODEL_NAME` 组装 LiteLLM 模型名。
 - 构建 LangGraph 状态机。
-- 把 `ToolRegistry.schemas()` 暴露给模型。
-- 当模型发起 tool call 时，通过 `ToolRegistry.execute()` 执行工具。
+- 把 core registry 的 `schemas()` 暴露给模型。
+- 当模型发起 tool call 时，通过 `ToolRouter` 解析，并由 `ToolRunner` 执行工具。
 - 将工具结果作为 `role=tool` 消息回填给模型。
 
 当前状态：
 
-- 已接入新的 `ToolRegistry`。
+- 已接入 `build_default_registry()` 和 `ToolRunner`。
 - 仍是同步调用模型。
 - 还没有真实 token streaming。
 - 工具已具备 read-only/mutating/parallel 元信息，但调度目前仍是顺序执行。
 
-### `tools/core/` 与 `tools/registry.py`
+### `context/`、`context_manager/` 与 `session/turn_context.py`
 
-工具系统已按 Codex 风格拆成 core 层、兼容门面和领域工具包。
+上下文系统已开始按官方 Codex 风格拆层。
+
+主要职责：
+
+- `context/environment_context.py` 保存 workspace root、current dir、git root 等环境快照。
+- `context/permissions_context.py` 保存审批策略、沙箱类型、受保护路径和网络策略快照。
+- `context/model_context.py` 保存本轮模型名、reasoning effort 和原始请求配置。
+- `context/user_context.py` 保存系统提示词和本轮用户输入。
+- `context_manager/history.py` 管理模型可见 messages，并负责清理不应回传的历史 `reasoning_content`。
+- `session/turn_context.py` 聚合 session、turn、workspace、context fragments、registry、runner 和 diff tracker。
+
+当前状态：
+
+- WebSocket 主路径每个 `user_input` 都会创建一个 `TurnContext`。
+- `run_turn()` 直接接收 `TurnContext`，不再散传 registry、runner、messages、session id、turn id 等参数。
+- 工具调用会通过 `tools/core/context.py` 中升级后的 `ToolInvocation` 携带 session、turn、workspace 和 approval 状态。
+- mutating 工具通过 `ToolInvocation.diff_tracker` 记录本轮 touched paths。
+
+### `tools/core/`
+
+工具系统已按 Codex 风格拆成 core 层和领域工具包，开发阶段不保留旧 project-root 构造入口。
 
 主要职责：
 
@@ -177,7 +205,7 @@ CLI 版 Agent 主循环。
 - `tools/core/catalog.py` 负责装配默认内置工具，替代 registry 内部硬编码。
 - `tools/core/runner.py` 统一 JSON 参数解析、审批适配、异常包装和 `ToolResult` 归一化。
 - `tools/core/router.py` 把模型返回的 tool call 解析为内部 `ToolInvocation`。
-- `tools/registry.py` 保留 `ToolRegistry(project_root, session_id)`、`schemas()`、`metadata()`、`execute()` 兼容入口。
+- 调用方直接组合 `build_default_registry()`、`create_tool_context()` 和 `ToolRunner`。
 
 当前注册工具：
 
@@ -245,7 +273,7 @@ append-only JSONL transcript 读写器。
 - 非模型上下文事件如 `session_started`、`permission_decision`、`conversation_title`、`runtime_error` 会被忽略。
 - 不从磁盘恢复 `reasoning_content`；活跃会话内存中会保留带 `tool_calls` 的 assistant `reasoning_content`，用于兼容 DeepSeek 工具调用后的上下文拼接要求。
 
-### `tools/types.py`
+### `tools/core/types.py`
 
 工具运行时共享类型。
 
@@ -379,15 +407,6 @@ append-only JSONL transcript 读写器。
 注意事项：
 
 - WebSocket 主路径支持等待用户回答；CLI 路径暂时没有交互式澄清 UI。
-
-### `tools/toolkit.py`
-
-旧工具入口兼容层。
-
-当前状态：
-
-- 不再承载核心工具逻辑。
-- 通过 `ToolRegistry` 提供旧接口兼容。
 
 ## 安全模块
 
@@ -628,7 +647,9 @@ agent_loop.py
 load_dotenv()
   |
   v
-ToolRegistry(project_root)
+build_default_registry()
+create_tool_context(project_root)
+ToolRunner(registry, context)
   |
   v
 LangGraph: model -> tools -> model
@@ -640,7 +661,7 @@ LiteLLM completion(tools=registry.schemas())
 模型返回 tool_calls
   |
   v
-registry.execute(name, arguments)
+runner.execute(name, arguments)
   |
   v
 工具执行 / 安全检查 / macOS 原生沙箱

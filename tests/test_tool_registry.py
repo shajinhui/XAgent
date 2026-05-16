@@ -13,7 +13,12 @@ from tools.core.registry import ToolRegistry as CoreToolRegistry
 from tools.core.router import ToolRouter
 from tools.core.runner import ToolRunner, create_tool_context
 from tools.core.types import ToolMeta, ToolPermissionError, ToolResult
-from tools.registry import ToolRegistry
+
+
+def build_default_runner(root: Path, session_id: str = "default") -> tuple[CoreToolRegistry, ToolRunner]:
+    registry = build_default_registry()
+    runner = ToolRunner(registry, create_tool_context(root, session_id))
+    return registry, runner
 
 
 class ToolRegistryTests(unittest.TestCase):
@@ -70,7 +75,7 @@ class ToolRegistryTests(unittest.TestCase):
 
     def test_metadata_exposes_tool_capabilities(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            registry = ToolRegistry(Path(tmp))
+            registry, _runner = build_default_runner(Path(tmp))
 
             metadata = registry.metadata()
 
@@ -83,18 +88,18 @@ class ToolRegistryTests(unittest.TestCase):
 
     def test_unknown_tool_returns_structured_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            registry = ToolRegistry(Path(tmp))
+            _registry, runner = build_default_runner(Path(tmp))
 
-            result = registry.execute("missing", "{}")
+            result = runner.execute("missing", "{}")
 
             self.assertFalse(result.ok)
             self.assertIn("未知工具", result.content)
 
     def test_bad_json_returns_structured_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            registry = ToolRegistry(Path(tmp))
+            _registry, runner = build_default_runner(Path(tmp))
 
-            result = registry.execute("read_file", "{")
+            result = runner.execute("read_file", "{")
 
             self.assertFalse(result.ok)
             self.assertIn("工具参数不是合法 JSON", result.content)
@@ -154,9 +159,9 @@ class ToolRegistryTests(unittest.TestCase):
 
     def test_run_command_unknown_command_requests_permission(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            registry = ToolRegistry(Path(tmp))
+            _registry, runner = build_default_runner(Path(tmp))
 
-            result = registry.execute(
+            result = runner.execute(
                 "run_command",
                 json.dumps({"command": "ruff check ."}),
             )
@@ -167,9 +172,9 @@ class ToolRegistryTests(unittest.TestCase):
 
     def test_ask_user_returns_clarification_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            registry = ToolRegistry(Path(tmp))
+            _registry, runner = build_default_runner(Path(tmp))
 
-            result = registry.execute(
+            result = runner.execute(
                 "ask_user",
                 json.dumps(
                     {
@@ -193,9 +198,9 @@ class ToolRegistryTests(unittest.TestCase):
 
     def test_run_command_dangerous_command_is_denied(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            registry = ToolRegistry(Path(tmp))
+            _registry, runner = build_default_runner(Path(tmp))
 
-            result = registry.execute(
+            result = runner.execute(
                 "run_command",
                 json.dumps({"command": "rm -rf /"}),
             )
@@ -206,9 +211,9 @@ class ToolRegistryTests(unittest.TestCase):
 
     def test_run_command_allowed_command_still_requests_permission(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            registry = ToolRegistry(Path(tmp))
+            _registry, runner = build_default_runner(Path(tmp))
 
-            result = registry.execute(
+            result = runner.execute(
                 "run_command",
                 json.dumps({"command": "python -m unittest discover -s tests"}),
             )
@@ -219,9 +224,9 @@ class ToolRegistryTests(unittest.TestCase):
 
     def test_run_command_invalid_cwd_is_denied(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            registry = ToolRegistry(Path(tmp))
+            _registry, runner = build_default_runner(Path(tmp))
 
-            result = registry.execute(
+            result = runner.execute(
                 "run_command",
                 json.dumps({"command": "echo ok", "cwd": ".."}),
             )
@@ -235,14 +240,14 @@ class ToolRegistryTests(unittest.TestCase):
             root = Path(tmp)
             nested = root / "desktop"
             nested.mkdir()
-            registry = ToolRegistry(root)
+            _registry, runner = build_default_runner(root)
 
             with patch.object(
-                registry.ctx.command_executor,
+                runner.ctx.command_executor,
                 "run",
                 return_value=CommandExecResult(True, 0, "ok\n", ""),
             ) as run_mock:
-                result = registry.execute(
+                result = runner.execute(
                     "run_command",
                     json.dumps({"command": "echo ok", "cwd": "desktop"}),
                     approved=True,
@@ -255,9 +260,9 @@ class ToolRegistryTests(unittest.TestCase):
     def test_mutating_file_tool_requires_approval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            registry = ToolRegistry(root)
+            _registry, runner = build_default_runner(root)
 
-            result = registry.execute(
+            result = runner.execute(
                 "write_file",
                 json.dumps({"path": "created.txt", "content": "hello"}),
             )
@@ -269,9 +274,9 @@ class ToolRegistryTests(unittest.TestCase):
     def test_mutating_file_tool_runs_after_approval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            registry = ToolRegistry(root)
+            _registry, runner = build_default_runner(root)
 
-            result = registry.execute(
+            result = runner.execute(
                 "write_file",
                 json.dumps({"path": "created.txt", "content": "hello"}),
                 approved=True,

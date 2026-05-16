@@ -1,0 +1,87 @@
+"""Tool invocation context shared by router and runner."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+from typing import Any
+
+
+@dataclass(frozen=True)
+class ToolApprovalState:
+    """Approval state attached to a tool invocation."""
+
+    approved: bool = False
+    feedback: str | None = None
+
+
+@dataclass
+class ToolCancellationState:
+    """Lightweight cancellation flag for future long-running tools."""
+
+    cancelled: bool = False
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+
+@dataclass
+class TurnDiffTracker:
+    """Tracks files touched by tools during a turn."""
+
+    touched_paths: list[str] = field(default_factory=list)
+
+    def record_path(self, path: Path | str) -> None:
+        value = path.as_posix() if isinstance(path, Path) else str(path)
+        if value not in self.touched_paths:
+            self.touched_paths.append(value)
+
+
+@dataclass
+class ToolInvocation:
+    """Internal representation of one model-requested tool call."""
+
+    name: str
+    arguments: str
+    call_id: str
+    session_id: str | None = None
+    turn_id: str | None = None
+    workspace_root: Path | None = None
+    current_dir: Path | None = None
+    source: str = "model"
+    approval: ToolApprovalState = field(default_factory=ToolApprovalState)
+    cancellation: ToolCancellationState = field(default_factory=ToolCancellationState)
+    diff_tracker: TurnDiffTracker = field(default_factory=TurnDiffTracker)
+
+    @classmethod
+    def from_model_call(
+        cls,
+        name: str,
+        arguments: str,
+        call_id: str,
+        turn_context: Any | None = None,
+    ) -> "ToolInvocation":
+        invocation = cls(name=name, arguments=arguments, call_id=call_id)
+        if turn_context is None:
+            return invocation
+
+        return cls(
+            name=name,
+            arguments=arguments,
+            call_id=call_id,
+            session_id=getattr(turn_context, "session_id", None),
+            turn_id=getattr(turn_context, "turn_id", None),
+            workspace_root=getattr(turn_context.environment, "root", None),
+            current_dir=getattr(turn_context.environment, "current_dir", None),
+            diff_tracker=getattr(turn_context, "diff_tracker", TurnDiffTracker()),
+        )
+
+    def with_approval(
+        self,
+        approved: bool,
+        feedback: str | None = None,
+    ) -> "ToolInvocation":
+        return replace(
+            self,
+            approval=ToolApprovalState(approved=approved, feedback=feedback),
+        )

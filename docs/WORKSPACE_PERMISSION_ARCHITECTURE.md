@@ -633,7 +633,8 @@ project-local config denylist：
 - `tools/filesystem/edit_file.py`
 - `tools/search/grep.py`
 - `tools/shell/run_command.py`
-- `tools/registry.py`
+- `tools/core/registry.py`
+- `tools/core/runner.py`
 
 交付：
 

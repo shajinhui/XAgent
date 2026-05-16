@@ -265,7 +265,7 @@ class WebSocketRequestDispatcher:
         else:
             suspended_category = self.context.session_state.suspended_category
             self.context.session_state.resume()
-            self.context.registry.ctx.circuit_breaker.reset(
+            self.context.runner.ctx.circuit_breaker.reset(
                 self.context.session_id,
                 suspended_category,
             )

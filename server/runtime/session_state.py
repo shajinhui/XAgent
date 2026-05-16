@@ -7,9 +7,12 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
+from context_manager import ContextManager
 from server.protocol.events import EVENT_SCHEMA_VERSION
 from session import SessionRecord, SessionStore
-from tools.registry import ToolRegistry
+from tools.core.catalog import build_default_registry
+from tools.core.registry import ToolRegistry
+from tools.core.runner import ToolRunner, create_tool_context
 from workspace import WorkspaceContext
 
 
@@ -54,7 +57,7 @@ class SessionRuntimeState:
 def create_websocket_session(
     workspace: WorkspaceContext,
     system_prompt: str,
-) -> tuple[str, SessionRuntimeState, ToolRegistry, List[Dict[str, Any]]]:
+) -> tuple[str, SessionRuntimeState, ToolRegistry, ToolRunner, ContextManager]:
     """创建 WebSocket 内存会话，但不立即写入磁盘。"""
 
     if workspace.session_store is None:
@@ -62,9 +65,10 @@ def create_websocket_session(
 
     session_id = str(uuid.uuid4())
     session_state = SessionRuntimeState(session_id=session_id)
-    registry = ToolRegistry(project_root=workspace.root, session_id=session_id)
-    messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
-    return session_id, session_state, registry, messages
+    registry = build_default_registry()
+    runner = ToolRunner(registry, create_tool_context(workspace.root, session_id))
+    history = ContextManager.with_system_prompt(system_prompt)
+    return session_id, session_state, registry, runner, history
 
 
 def persist_websocket_session(
