@@ -1,3 +1,5 @@
+"""macOS Seatbelt 命令执行器。"""
+
 from __future__ import annotations
 
 import platform
@@ -10,6 +12,8 @@ from pathlib import Path
 
 @dataclass
 class CommandExecResult:
+    """命令执行后的标准化结果。"""
+
     ok: bool
     exit_code: int
     stdout: str
@@ -17,7 +21,11 @@ class CommandExecResult:
 
 
 class SecureMacOSSandboxExecutor:
-    """Use macOS Seatbelt through sandbox-exec to run commands in the real workspace."""
+    """在 macOS 上使用 Seatbelt（sandbox-exec）在受限环境中运行命令。
+
+    该执行器会生成一个 Seatbelt profile，限制写权限到工作区及临时目录，
+    并通过 `sandbox-exec` 启动子进程以执行指定命令，返回统一的 `CommandExecResult`。
+    """
 
     def __init__(
         self,
@@ -31,9 +39,13 @@ class SecureMacOSSandboxExecutor:
 
     @staticmethod
     def _seatbelt_string(value: str) -> str:
+        """转义 Seatbelt profile 中的字符串字面量。"""
+
         return value.replace("\\", "\\\\").replace('"', '\\"')
 
     def _profile(self) -> str:
+        """生成限制写入范围的 Seatbelt profile。"""
+
         workspace = self._seatbelt_string(self.project_root.as_posix())
         return f"""
 (version 1)
@@ -65,6 +77,8 @@ class SecureMacOSSandboxExecutor:
         timeout_seconds: int | None = None,
         cwd: Path | None = None,
     ) -> CommandExecResult:
+        """在受限 Seatbelt profile 下执行 shell 命令。"""
+
         if platform.system() != "Darwin":
             return CommandExecResult(False, 127, "", "macOS 原生沙箱仅支持 Darwin/macOS")
 
@@ -83,6 +97,7 @@ class SecureMacOSSandboxExecutor:
 
         shell_command = f"set -eu; cd {shlex.quote(command_cwd.as_posix())}; {command}"
         try:
+            # 使用 /bin/sh -lc 保持与终端 shell 命令接近的行为，同时由 Seatbelt 限制写入。
             proc = subprocess.run(
                 [sandbox_exec, "-p", self._profile(), "/bin/sh", "-lc", shell_command],
                 cwd=command_cwd,

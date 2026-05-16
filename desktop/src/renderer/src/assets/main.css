@@ -1279,7 +1279,8 @@ svg {
   pointer-events: auto;
 }
 
-.permission-composer {
+.permission-composer,
+.clarification-composer {
   width: min(var(--composer-width), calc(100% - var(--composer-safe-gap)));
   box-sizing: border-box;
   display: grid;
@@ -1293,12 +1294,14 @@ svg {
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.24);
 }
 
-.permission-heading {
+.permission-heading,
+.clarification-heading {
   display: grid;
   gap: 6px;
 }
 
-.permission-heading p {
+.permission-heading p,
+.clarification-heading p {
   margin: 0;
   color: #e6e8ea;
   font-size: 14px;
@@ -1331,7 +1334,8 @@ svg {
   gap: 8px;
 }
 
-.permission-option {
+.permission-option,
+.clarification-option {
   width: 100%;
   min-width: 0;
   display: flex;
@@ -1347,12 +1351,14 @@ svg {
   text-align: left;
 }
 
-.permission-option span {
+.permission-option span,
+.clarification-option span {
   color: #7dd3fc;
   font-weight: 700;
 }
 
-.permission-option strong {
+.permission-option strong,
+.clarification-option strong {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1360,10 +1366,67 @@ svg {
   font-weight: 600;
 }
 
-.permission-option:hover {
+.permission-option:hover,
+.clarification-option:hover,
+.clarification-option.selected {
   border-color: rgba(148, 163, 184, 0.18);
   color: #e6e8ea;
   background: rgba(148, 163, 184, 0.13);
+}
+
+.clarification-options {
+  display: grid;
+  gap: 8px;
+}
+
+.clarification-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+}
+
+.clarification-option strong {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.clarification-option small {
+  border-radius: 999px;
+  padding: 2px 7px;
+  color: #071312;
+  background: #5eead4;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.clarification-option em {
+  grid-column: 2;
+  color: #8b96a3;
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.35;
+}
+
+.clarification-composer textarea {
+  width: 100%;
+  min-height: 62px;
+  resize: vertical;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 14px;
+  outline: 0;
+  padding: 12px;
+  color: #e6e8ea;
+  background: rgba(15, 23, 42, 0.28);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.clarification-composer textarea:focus {
+  border-color: rgba(45, 212, 191, 0.36);
+}
+
+.clarification-composer textarea::placeholder {
+  color: #68727f;
 }
 
 .permission-feedback {
@@ -1393,7 +1456,8 @@ svg {
   color: #68727f;
 }
 
-.permission-actions {
+.permission-actions,
+.clarification-actions {
   display: flex;
   justify-content: flex-end;
   align-items: center;
@@ -1402,7 +1466,9 @@ svg {
 
 .permission-back,
 .permission-skip,
-.permission-submit {
+.permission-submit,
+.clarification-skip,
+.clarification-submit {
   border: 0;
   border-radius: 999px;
   padding: 9px 14px;
@@ -1410,13 +1476,20 @@ svg {
   cursor: pointer;
 }
 
-.permission-submit {
+.permission-submit,
+.clarification-submit {
   color: #061313;
   background: #2dd4bf;
 }
 
+.clarification-submit:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
 .permission-back,
-.permission-skip {
+.permission-skip,
+.clarification-skip {
   color: #9aa3ad;
   background: transparent;
 }
@@ -1479,7 +1552,8 @@ svg {
     width: 100%;
   }
 
-  .permission-composer {
+  .permission-composer,
+  .clarification-composer {
     width: 100%;
   }
 
@@ -1487,7 +1561,8 @@ svg {
     padding: 0 12px 12px;
   }
 
-  .permission-option strong {
+  .permission-option strong,
+  .clarification-option strong {
     white-space: normal;
   }
 

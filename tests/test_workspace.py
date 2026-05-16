@@ -4,7 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from server.app import build_system_prompt, create_websocket_session
+from server.app import build_system_prompt
+from server.runtime.session_state import create_websocket_session, persist_websocket_session
 from workspace import WorkspaceManager, WorkspaceValidationError, validate_workspace_path
 
 
@@ -74,7 +75,11 @@ class WorkspaceValidationTests(unittest.TestCase):
             self.assertEqual(messages[0]["role"], "system")
             self.assertIsNotNone(workspace.session_store)
             assert workspace.session_store is not None
-            record = workspace.session_store.get_session(session_id)
+
+            with self.assertRaises(KeyError):
+                workspace.session_store.get_session(session_id)
+
+            record = persist_websocket_session(workspace.session_store, session_id, workspace)
             self.assertEqual(record.metadata["workspace"]["root"], workspace.root.as_posix())
 
 

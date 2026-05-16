@@ -62,6 +62,31 @@ class SessionStoreTests(unittest.TestCase):
 
             self.assertEqual([session.session_id for session in sessions], ["newer", "older"])
 
+    def test_list_sessions_can_filter_sessions_without_user_turns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SessionStore(Path(tmp))
+            empty = store.create_session(session_id="empty")
+            active = store.create_session(session_id="active")
+
+            store.append_event(empty.session_id, "session_resumed", {"turn_id": "system"})
+            store.append_event(active.session_id, "user_message", {"turn_id": "turn-active"})
+
+            sessions = store.list_sessions(with_turns=True)
+
+            self.assertEqual([session.session_id for session in sessions], ["active"])
+
+    def test_system_events_do_not_overwrite_last_user_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SessionStore(Path(tmp))
+            record = store.create_session(session_id="session-1")
+
+            store.append_event(record.session_id, "user_message", {"turn_id": "turn-1"})
+            store.append_event(record.session_id, "session_resumed", {"turn_id": "system"})
+            store.append_event(record.session_id, "conversation_title", {"turn_id": "title"})
+
+            updated = store.get_session(record.session_id)
+            self.assertEqual(updated.last_turn_id, "turn-1")
+
     def test_load_events_rejects_unknown_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = SessionStore(Path(tmp))

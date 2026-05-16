@@ -6,7 +6,7 @@ export type RuntimeSessionState = {
   suspended_at: number | null
 }
 
-export type RuntimeReasoningEffort = 'off' | 'low' | 'medium' | 'high'
+export type RuntimeReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'max'
 
 export type RuntimeModelConfig = {
   default_model: string
@@ -58,6 +58,20 @@ export type RuntimeDisplayMessage = {
   role: 'user' | 'assistant'
   content: string
   timestamp?: number
+}
+
+export type ClarificationOption = {
+  id?: string
+  label: string
+  description?: string
+  recommended?: boolean
+}
+
+export type ClarificationResponsePayload = {
+  choice_id?: string
+  option_index?: number
+  content?: string
+  skipped?: boolean
 }
 
 type RuntimeEventBase = {
@@ -141,6 +155,20 @@ export type PermissionDecisionAckEvent = RuntimeEventBase & {
   approved: boolean
 }
 
+export type ClarificationRequestEvent = RuntimeEventBase & {
+  type: 'clarification_request'
+  tool: string
+  question: string
+  options: ClarificationOption[]
+  allow_freeform: boolean
+  metadata: Record<string, unknown>
+}
+
+export type ClarificationResponseAckEvent = RuntimeEventBase & {
+  type: 'clarification_response_ack'
+  skipped: boolean
+}
+
 export type SessionStateEvent = RuntimeEventBase & {
   type: 'session_suspended' | 'session_blocked' | 'session_resumed'
   detail?: string
@@ -199,6 +227,8 @@ export type RuntimeEvent =
   | ToolCallResultEvent
   | PermissionRequestEvent
   | PermissionDecisionAckEvent
+  | ClarificationRequestEvent
+  | ClarificationResponseAckEvent
   | SessionStateEvent
   | FinalAnswerEvent
   | ConversationTitleEvent
@@ -220,6 +250,10 @@ export type RuntimeClientPacket =
       approved: boolean
       feedback?: string
     }
+  | ({
+      type: 'clarification_response'
+      request_id?: string
+    } & ClarificationResponsePayload)
   | {
       type: 'resume_session'
       session_id?: string

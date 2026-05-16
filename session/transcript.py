@@ -1,3 +1,5 @@
+"""append-only JSONL transcript 读写器。"""
+
 from __future__ import annotations
 
 import json
@@ -10,7 +12,7 @@ from session.models import TranscriptEvent
 
 
 class TranscriptWriter:
-    """Append-only JSONL transcript for durable session replay."""
+    """为单个 session 维护可重放的 JSONL 事件流。"""
 
     def __init__(self, transcript_path: Path) -> None:
         self.transcript_path = transcript_path
@@ -25,6 +27,8 @@ class TranscriptWriter:
         timestamp: float | None = None,
         event_id: str | None = None,
     ) -> TranscriptEvent:
+        """追加一条 transcript event，并返回结构化事件对象。"""
+
         event = TranscriptEvent(
             event_id=event_id or str(uuid.uuid4()),
             session_id=session_id,
@@ -38,6 +42,8 @@ class TranscriptWriter:
         return event
 
     def load(self) -> List[TranscriptEvent]:
+        """读取并校验 transcript 文件中的全部事件。"""
+
         if not self.transcript_path.exists():
             return []
 
@@ -51,6 +57,8 @@ class TranscriptWriter:
         return events
 
     def extend(self, events: Iterable[TranscriptEvent]) -> None:
+        """批量追加事件，主要用于测试或未来迁移。"""
+
         with self.transcript_path.open("a", encoding="utf-8") as handle:
             for event in events:
                 handle.write(json.dumps(_event_to_json(event), ensure_ascii=False, sort_keys=True))
@@ -58,6 +66,8 @@ class TranscriptWriter:
 
 
 def _event_to_json(event: TranscriptEvent) -> Dict[str, Any]:
+    """把 TranscriptEvent 转为可 JSON 序列化的 dict。"""
+
     return {
         "event_id": event.event_id,
         "session_id": event.session_id,
@@ -68,6 +78,8 @@ def _event_to_json(event: TranscriptEvent) -> Dict[str, Any]:
 
 
 def _event_from_json(raw: Dict[str, Any], line_number: int) -> TranscriptEvent:
+    """从 JSON 行恢复 TranscriptEvent，并在坏行时报出行号。"""
+
     required = {"event_id", "session_id", "type", "timestamp", "payload"}
     missing = required.difference(raw)
     if missing:

@@ -1,3 +1,1 @@
-from tools.registry import ToolRegistry
-
-__all__ = ["ToolRegistry"]
+"""Codex-mini 工具包。"""

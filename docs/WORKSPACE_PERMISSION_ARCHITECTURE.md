@@ -628,11 +628,11 @@ project-local config denylist：
 
 - `security/policy.py`
 - `security/permissions.py`
-- `tools/read_file.py`
-- `tools/write_file.py`
-- `tools/edit_file.py`
-- `tools/grep.py`
-- `tools/run_command.py`
+- `tools/filesystem/read_file.py`
+- `tools/filesystem/write_file.py`
+- `tools/filesystem/edit_file.py`
+- `tools/search/grep.py`
+- `tools/shell/run_command.py`
 - `tools/registry.py`
 
 交付：
@@ -655,7 +655,7 @@ project-local config denylist：
 修改范围：
 
 - `sandbox/macos_executor.py`
-- `tools/run_command.py`
+- `tools/shell/run_command.py`
 - `tests/test_macos_executor.py`
 
 交付：

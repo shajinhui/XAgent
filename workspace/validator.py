@@ -1,3 +1,5 @@
+"""workspace 路径安全校验。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -18,6 +20,8 @@ SYSTEM_ROOT_PREFIXES = (
 
 
 def validate_workspace_path(raw_path: str | Path) -> Path:
+    """把用户选择的路径规范化为安全的 workspace 根目录。"""
+
     candidate = Path(raw_path).expanduser().resolve()
 
     if not candidate.exists():

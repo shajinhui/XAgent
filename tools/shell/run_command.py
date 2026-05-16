@@ -1,10 +1,12 @@
+"""通过安全策略和 macOS Seatbelt 执行命令的高风险工具。"""
+
 from __future__ import annotations
 
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from tools.types import ToolExecutionContext, ToolMeta, ToolPermissionError
+from tools.core.types import ToolExecutionContext, ToolMeta, ToolPermissionError
 
 
 META = ToolMeta(
@@ -17,6 +19,8 @@ META = ToolMeta(
 
 
 class RunCommandArgs(BaseModel):
+    """run_command 工具入参。"""
+
     command: str = Field(..., description="要执行的 shell 命令")
     timeout: int = Field(20, ge=1, le=120, description="超时时间（秒）")
     cwd: str | None = Field(
@@ -26,6 +30,8 @@ class RunCommandArgs(BaseModel):
 
 
 def schema() -> dict:
+    """返回供模型调用的 OpenAI tool schema。"""
+
     return {
         "type": "function",
         "function": {
@@ -37,6 +43,8 @@ def schema() -> dict:
 
 
 def run(ctx: ToolExecutionContext, payload: dict) -> str:
+    """执行命令前完成 cwd 校验、命令策略判断和用户审批检查。"""
+
     args = RunCommandArgs(**payload)
     raw_cwd = args.cwd.strip() if args.cwd else None
 
@@ -57,6 +65,7 @@ def run(ctx: ToolExecutionContext, payload: dict) -> str:
     approved = bool(payload.get("_approved", False))
     decision = ctx.policy.check_command(args.command, approved=approved)
     if decision.requires_approval:
+        # 非白名单命令先返回 ask，让 WebSocket 层弹出审批，而不是直接执行。
         raise ToolPermissionError(
             f"命令需要用户确认: {decision.reason}",
             metadata={
@@ -69,6 +78,7 @@ def run(ctx: ToolExecutionContext, payload: dict) -> str:
         )
 
     if not decision.allowed:
+        # 明确 deny 的命令会累计拒绝次数，达到阈值后挂起会话。
         suspended = ctx.circuit_breaker.record_rejection(ctx.session_id, decision.category)
         count = ctx.circuit_breaker.count(ctx.session_id, decision.category)
         message = f"命令被拒绝: {decision.reason} (连续拒绝 {count}/3)"
@@ -86,6 +96,7 @@ def run(ctx: ToolExecutionContext, payload: dict) -> str:
         raise ToolPermissionError(message, metadata=metadata)
 
     if not approved:
+        # 即便是白名单命令，run_command 本身仍是 mutating/高风险入口，需要用户确认。
         raise ToolPermissionError(
             f"命令需要用户确认: {args.command}",
             metadata={
@@ -110,6 +121,8 @@ def run(ctx: ToolExecutionContext, payload: dict) -> str:
 
 
 def _display_cwd(ctx: ToolExecutionContext, cwd: Path) -> str:
+    """把 cwd 转成前端更容易阅读的相对路径。"""
+
     try:
         relative = cwd.relative_to(ctx.project_root)
     except ValueError:

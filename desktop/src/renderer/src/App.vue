@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import ChatComposer from '@renderer/components/ChatComposer.vue'
+import ClarificationDialog from '@renderer/components/ClarificationDialog.vue'
 import MessageList from '@renderer/components/MessageList.vue'
 import PermissionDialog from '@renderer/components/PermissionDialog.vue'
 import TitleBar from '@renderer/components/TitleBar.vue'
@@ -495,6 +496,12 @@ onBeforeUnmount(() => {
           :request="runtime.activePermission"
           @approve="runtime.approvePermission"
           @deny="runtime.denyPermission"
+        />
+        <ClarificationDialog
+          v-else-if="runtime.activeClarification"
+          :request="runtime.activeClarification"
+          @answer="runtime.answerClarification"
+          @skip="runtime.skipClarification"
         />
         <ChatComposer
           v-else

@@ -1,8 +1,10 @@
+"""读取 workspace 内文件的只读工具。"""
+
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from tools.types import ToolExecutionContext, ToolMeta
+from tools.core.types import ToolExecutionContext, ToolMeta
 
 
 META = ToolMeta(
@@ -14,10 +16,14 @@ META = ToolMeta(
 
 
 class ReadFileArgs(BaseModel):
+    """read_file 工具入参。"""
+
     path: str = Field(..., description="要读取的文件路径（相对项目根目录或绝对路径）")
 
 
 def schema() -> dict:
+    """返回供模型调用的 OpenAI tool schema。"""
+
     return {
         "type": "function",
         "function": {
@@ -29,6 +35,8 @@ def schema() -> dict:
 
 
 def run(ctx: ToolExecutionContext, payload: dict) -> str:
+    """读取文件内容；路径必须经过 workspace 边界校验。"""
+
     args = ReadFileArgs(**payload)
     path = ctx.policy.resolve_path(args.path)
     if not path.exists():

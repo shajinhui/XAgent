@@ -1,40 +1,15 @@
-from __future__ import annotations
+"""兼容层：工具共享类型已迁移到 tools.core.types。"""
 
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict
+from tools.core.types import (
+    ToolExecutionContext,
+    ToolMeta,
+    ToolPermissionError,
+    ToolResult,
+)
 
-from security.circuit_breaker import CircuitBreaker
-from security.policy import SecurityPolicy
-from sandbox.macos_executor import SecureMacOSSandboxExecutor
-
-
-@dataclass
-class ToolResult:
-    ok: bool
-    content: str
-    metadata: Dict[str, Any] | None = None
-
-
-@dataclass(frozen=True)
-class ToolMeta:
-    name: str
-    is_read_only: bool
-    is_mutating: bool
-    supports_parallel: bool
-    requires_approval: bool = False
-
-
-class ToolPermissionError(PermissionError):
-    def __init__(self, message: str, metadata: Dict[str, Any] | None = None) -> None:
-        super().__init__(message)
-        self.metadata = metadata or {}
-
-
-@dataclass
-class ToolExecutionContext:
-    project_root: Path
-    session_id: str
-    policy: SecurityPolicy
-    circuit_breaker: CircuitBreaker
-    command_executor: SecureMacOSSandboxExecutor
+__all__ = [
+    "ToolExecutionContext",
+    "ToolMeta",
+    "ToolPermissionError",
+    "ToolResult",
+]

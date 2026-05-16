@@ -1,3 +1,10 @@
+"""
+路径和命令安全策略。
+
+这里不执行任何工具，只负责判断路径是否越界、写入是否触碰保护目录、
+命令是否危险、是否允许执行或需要用户确认。
+"""
+
 from __future__ import annotations
 
 import re
@@ -56,6 +63,8 @@ PROTECTED_COMMAND_PATTERNS = [
 
 @dataclass
 class CommandDecision:
+    """命令策略检查后的动作、分类和说明。"""
+
     action: Literal["allow", "deny", "ask"]
     category: str
     reason: str = ""
@@ -70,10 +79,14 @@ class CommandDecision:
 
 
 class SecurityPolicy:
+    """单个 workspace 的文件路径和命令安全策略。"""
+
     def __init__(self, project_root: Path) -> None:
         self.project_root = project_root.resolve()
 
     def resolve_path(self, raw_path: str) -> Path:
+        """解析路径，并确保结果仍在 workspace 内。"""
+
         candidate = Path(raw_path)
         if not candidate.is_absolute():
             candidate = self.project_root / candidate
@@ -83,6 +96,8 @@ class SecurityPolicy:
         return resolved
 
     def resolve_command_cwd(self, raw_cwd: str | None = None) -> Path:
+        """解析命令 cwd；cwd 只能是 workspace 内的普通目录。"""
+
         if raw_cwd is None or not raw_cwd.strip():
             return self.project_root
 
@@ -104,6 +119,8 @@ class SecurityPolicy:
         return resolved
 
     def ensure_writable_path(self, path: Path) -> None:
+        """确认目标路径允许写入。"""
+
         resolved = path.resolve()
         try:
             relative = resolved.relative_to(self.project_root)
@@ -116,6 +133,8 @@ class SecurityPolicy:
             raise PermissionError(f"受保护路径，禁止写入: {relative_text}")
 
     def check_command(self, command: str, approved: bool = False) -> CommandDecision:
+        """判断命令是允许、拒绝，还是需要用户确认。"""
+
         normalized = " ".join(command.strip().split()).lower()
 
         for pattern in DANGEROUS_PATTERNS:

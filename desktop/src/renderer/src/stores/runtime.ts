@@ -3,6 +3,8 @@ import { RuntimeSocket, type RuntimeConnectionStatus } from '@renderer/services/
 import { useChatStore } from '@renderer/stores/chat'
 import type { ActivityStepKind } from '@renderer/stores/chat'
 import type {
+  ClarificationRequestEvent,
+  ClarificationResponsePayload,
   PermissionRequestEvent,
   RuntimeEvent,
   RuntimeModelConfig,
@@ -27,7 +29,7 @@ const FALLBACK_MODEL_OPTIONS = [
   'deepseek/deepseek-chat',
   'deepseek/deepseek-reasoner'
 ]
-const FALLBACK_REASONING_OPTIONS: RuntimeReasoningEffort[] = ['off', 'low', 'medium', 'high']
+const FALLBACK_REASONING_OPTIONS: RuntimeReasoningEffort[] = ['off', 'low', 'medium', 'high', 'max']
 
 let runtimeSocket: RuntimeSocket | null = null
 let reconnectTimer: number | null = null
@@ -35,6 +37,22 @@ let manualDisconnect = false
 
 function formatToolLabel(event: PermissionRequestEvent): string {
   return event.tool || event.request_id || 'tool'
+}
+
+function formatClarificationLabel(event: ClarificationRequestEvent): string {
+  return event.question || event.request_id || '需要确认问题'
+}
+
+function formatClarificationDetail(event: ClarificationRequestEvent): string | undefined {
+  if (!event.options.length) return undefined
+
+  return event.options
+    .map((option, index) => {
+      const recommended = option.recommended ? '（推荐）' : ''
+      const description = option.description ? ` - ${option.description}` : ''
+      return `${index + 1}. ${option.label}${recommended}${description}`
+    })
+    .join('\n')
 }
 
 function parseToolArguments(value: string): Record<string, unknown> {
@@ -272,6 +290,7 @@ export const useRuntimeStore = defineStore('runtime', {
     errorMessage: '',
     sessionState: null as RuntimeSessionState | null,
     activePermission: null as PermissionRequestEvent | null,
+    activeClarification: null as ClarificationRequestEvent | null,
     sessionHistory: [] as RuntimeSessionSummary[],
     sessionsLoading: false,
     selectedSessionId: '',
@@ -559,6 +578,14 @@ export const useRuntimeStore = defineStore('runtime', {
       this.sendPermissionDecision(false, feedback)
     },
 
+    answerClarification(payload: ClarificationResponsePayload): void {
+      this.sendClarificationResponse(payload)
+    },
+
+    skipClarification(): void {
+      this.sendClarificationResponse({ skipped: true })
+    },
+
     async resumeSession(sessionId?: string): Promise<void> {
       if (!runtimeSocket?.isOpen) {
         await this.connect({ silent: true })
@@ -592,6 +619,7 @@ export const useRuntimeStore = defineStore('runtime', {
       chat.resetConversation()
       this.activeTurnId = ''
       this.activePermission = null
+      this.activeClarification = null
       this.errorMessage = ''
 
       if (!runtimeSocket?.isOpen) {
@@ -668,6 +696,16 @@ export const useRuntimeStore = defineStore('runtime', {
       })
     },
 
+    sendClarificationResponse(payload: ClarificationResponsePayload): void {
+      if (!this.activeClarification || !runtimeSocket?.isOpen) return
+
+      runtimeSocket.send({
+        type: 'clarification_response',
+        request_id: this.activeClarification.request_id,
+        ...payload
+      })
+    },
+
     requestConversationTitle(): void {
       const chat = useChatStore()
       if (!runtimeSocket?.isOpen || !chat.needsConversationTitle) return
@@ -716,6 +754,7 @@ export const useRuntimeStore = defineStore('runtime', {
           this.tools = event.tools
           this.activeTurnId = ''
           this.activePermission = null
+          this.activeClarification = null
           this.sessionHistory =
             this.sessionsByWorkspaceRoot[normalizeWorkspaceRoot(event.workspace.root)] || []
           chat.resetConversation()
@@ -749,6 +788,7 @@ export const useRuntimeStore = defineStore('runtime', {
           }
           this.activeTurnId = ''
           this.activePermission = null
+          this.activeClarification = null
           chat.resetConversation()
           this.requestSessions()
           break
@@ -783,6 +823,7 @@ export const useRuntimeStore = defineStore('runtime', {
             this.sessionState = event.session_state
             this.activeTurnId = ''
             this.activePermission = null
+            this.activeClarification = null
             chat.resetConversation()
           } else if (this.selectedSessionId === event.deleted_session_id) {
             this.selectedSessionId = this.sessionId
@@ -811,6 +852,7 @@ export const useRuntimeStore = defineStore('runtime', {
           break
         case 'permission_request':
           this.activePermission = event
+          this.activeClarification = null
           chat.upsertActivityEvent(`等待权限确认：${formatToolLabel(event)}`, 'waiting', {
             requestId: event.request_id,
             kind: 'permission',
@@ -828,6 +870,22 @@ export const useRuntimeStore = defineStore('runtime', {
             }
           )
           break
+        case 'clarification_request':
+          this.activeClarification = event
+          this.activePermission = null
+          chat.upsertActivityEvent(`正在询问：${formatClarificationLabel(event)}`, 'waiting', {
+            requestId: event.request_id,
+            kind: 'question',
+            detail: formatClarificationDetail(event)
+          })
+          break
+        case 'clarification_response_ack':
+          this.activeClarification = null
+          chat.upsertActivityEvent(event.skipped ? '已跳过问题' : '已收到回答', 'success', {
+            requestId: event.request_id,
+            kind: 'question'
+          })
+          break
         case 'session_suspended':
         case 'session_blocked':
           this.sessionState = event.session_state
@@ -839,6 +897,7 @@ export const useRuntimeStore = defineStore('runtime', {
             this.selectedSessionId = event.session_id
           }
           this.sessionState = event.session_state
+          this.activeClarification = null
           if (event.resumed_from_disk) {
             chat.loadConversation(event.messages || [], event.session?.title || '历史会话')
           } else {
@@ -850,6 +909,7 @@ export const useRuntimeStore = defineStore('runtime', {
         case 'final_answer':
           this.sessionState = event.session_state
           this.activeTurnId = ''
+          this.activeClarification = null
           chat.finishActivity('success')
           chat.finishAssistantStream(event.content)
           this.requestSessions()

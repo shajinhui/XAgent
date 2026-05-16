@@ -1,8 +1,10 @@
+"""写入 workspace 内文件的 mutating 工具。"""
+
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from tools.types import ToolExecutionContext, ToolMeta
+from tools.core.types import ToolExecutionContext, ToolMeta
 
 
 META = ToolMeta(
@@ -15,12 +17,16 @@ META = ToolMeta(
 
 
 class WriteFileArgs(BaseModel):
+    """write_file 工具入参。"""
+
     path: str = Field(..., description="要写入的文件路径")
     content: str = Field(..., description="写入内容")
     append: bool = Field(False, description="是否以追加模式写入")
 
 
 def schema() -> dict:
+    """返回供模型调用的 OpenAI tool schema。"""
+
     return {
         "type": "function",
         "function": {
@@ -32,6 +38,8 @@ def schema() -> dict:
 
 
 def run(ctx: ToolExecutionContext, payload: dict) -> str:
+    """写入文件；调用方必须先通过工具审批。"""
+
     args = WriteFileArgs(**payload)
     path = ctx.policy.resolve_path(args.path)
     ctx.policy.ensure_writable_path(path)

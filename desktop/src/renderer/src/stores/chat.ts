@@ -11,6 +11,7 @@ export type ActivityStepKind =
   | 'edit'
   | 'command'
   | 'permission'
+  | 'question'
   | 'web'
   | 'tool'
   | 'error'
@@ -56,10 +57,12 @@ function formatElapsedTime(startedAt?: number, finishedAt?: number): string {
 }
 
 function getActivitySummary(kind: ActivityStepKind, status: ActivityStepStatus): string {
+  if (status === 'waiting' && kind === 'question') return '等待用户回复'
   if (status === 'waiting') return '等待权限确认'
   if (status === 'error') return '处理遇到问题'
   if (kind === 'command') return '正在运行命令'
   if (kind === 'permission') return '等待权限确认'
+  if (kind === 'question') return '正在询问问题'
   return '正在使用工具'
 }
 

@@ -54,12 +54,13 @@ python agent_loop.py
 ## 项目结构
 
 - `agent_loop.py`：终端版 Agent 主循环（LangGraph 条件循环）
-- `tools/registry.py`：工具注册、schema 暴露、执行分发
-- `tools/read_file.py`：读文件工具
-- `tools/write_file.py`：写文件工具
-- `tools/edit_file.py`：按行编辑工具
-- `tools/grep.py`：代码搜索工具（rg/grep）
-- `tools/run_command.py`：命令工具（macOS 原生沙箱执行）
+- `tools/registry.py`：工具系统兼容门面
+- `tools/core/`：工具协议、纯注册表、路由、执行器、默认目录和共享类型
+- `tools/filesystem/`：读文件、写文件、按行编辑工具
+- `tools/search/`：代码搜索工具（rg/grep）
+- `tools/shell/`：命令工具（macOS 原生沙箱执行）
+- `tools/network/`：可选联网工具
+- `tools/interaction/`：模型主动澄清提问工具
 - `security/`：路径校验、命令白名单、熔断器
 - `sandbox/macos_executor.py`：macOS Seatbelt 安全执行器
 - `server/app.py`：FastAPI WebSocket 服务（`/agent/ws`）
@@ -76,9 +77,9 @@ workspace 与权限策略专题架构见：[`docs/WORKSPACE_PERMISSION_ARCHITECT
 
 ## 说明
 
-- 如果使用 OpenAI：配置 `OPENAI_API_KEY`，并保持 `MODEL_PROVIDER=openai`。
-- 如果使用 DeepSeek：配置 `DEEPSEEK_API_KEY`，并把 `MODEL_PROVIDER=deepseek`。
-- 桌面端会从后端读取模型配置；`MODEL_OPTIONS` 可扩展输入栏旁边的模型下拉列表，`REASONING_EFFORT=off|low|medium|high` 可设置默认思考程度。
+- 模型调用统一配置 `API_KEY`，不要按服务商拆成 `OPENAI_API_KEY` / `DEEPSEEK_API_KEY`。
+- `MODEL_PROVIDER` / `MODEL_NAME` 是主 Agent 模型；`LOW_COST_MODEL_PROVIDER` / `LOW_COST_MODEL_NAME` 是标题生成、路由判断等简单任务使用的低成本模型，默认继承主模型。
+- 桌面端会从后端读取模型配置；`MODEL_OPTIONS` 可扩展输入栏旁边的模型下拉列表，`REASONING_EFFORT=off|low|medium|high|max` 可设置默认思考程度。DeepSeek 模型会额外按官方 thinking 参数处理：`off` 显式关闭 thinking，`low/medium` 映射为 `high`，`xhigh/max` 映射为 `max`。
 - 阶段 2 已将 `run_command` 切换到 macOS 原生沙箱执行，并增加命令白名单、风险拦截和工具元信息。
 - macOS 沙箱当前使用 `sandbox-exec`/Seatbelt：命令在真实项目目录执行，默认禁止网络，只允许写项目目录和临时目录，并受命令策略限制。
 - 如果当前进程本身已经处在受限沙箱里，`sandbox-exec` 可能返回 `sandbox_apply: Operation not permitted`；正常终端/桌面应用运行环境下再做端到端验证。
@@ -114,6 +115,8 @@ wscat -c ws://127.0.0.1:8000/agent/ws
 - `tool_call_result`
 - `permission_request`
 - `permission_decision_ack`
+- `clarification_request`
+- `clarification_response_ack`
 - `session_suspended`
 - `assistant_token`
 - `final_answer`

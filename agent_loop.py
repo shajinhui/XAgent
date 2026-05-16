@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from langgraph.graph import END, START, StateGraph
 from litellm import completion
 
+from tools.core.router import ToolRouter
 from tools.registry import ToolRegistry
 
 
@@ -41,6 +42,53 @@ def _build_model_name() -> str:
     return f"{provider}/{model}"
 
 
+def _build_api_kwargs() -> Dict[str, str]:
+    kwargs: Dict[str, str] = {}
+    api_key = os.getenv("API_KEY", "").strip()
+    if api_key:
+        kwargs["api_key"] = api_key
+
+    api_base = os.getenv("API_BASE", "").strip()
+    if api_base:
+        kwargs["api_base"] = api_base
+    return kwargs
+
+
+def _normalize_reasoning_effort() -> str:
+    effort = os.getenv("REASONING_EFFORT", "off").strip().lower()
+    aliases = {
+        "": "off",
+        "none": "off",
+        "disabled": "off",
+        "false": "off",
+        "0": "off",
+        "minimal": "low",
+        "normal": "medium",
+        "xhigh": "max",
+    }
+    effort = aliases.get(effort, effort)
+    if effort in {"off", "low", "medium", "high", "max"}:
+        return effort
+    return "off"
+
+
+def _build_completion_kwargs(model_name: str) -> Dict[str, Any]:
+    kwargs: Dict[str, Any] = {"model": model_name, **_build_api_kwargs()}
+    reasoning_effort = _normalize_reasoning_effort()
+    if model_name.startswith("deepseek/"):
+        kwargs["extra_body"] = {
+            "thinking": {"type": "disabled" if reasoning_effort == "off" else "enabled"}
+        }
+        if reasoning_effort != "off":
+            kwargs["reasoning_effort"] = "max" if reasoning_effort == "max" else "high"
+            return kwargs
+
+    kwargs["temperature"] = 0
+    if reasoning_effort != "off":
+        kwargs["reasoning_effort"] = reasoning_effort
+    return kwargs
+
+
 def call_model(state: AgentState, registry: ToolRegistry) -> AgentState:
     """调用 LLM 模型节点并将模型响应附加到消息列表中。
 
@@ -53,11 +101,10 @@ def call_model(state: AgentState, registry: ToolRegistry) -> AgentState:
     model_name = _build_model_name()
     # 调用 litellm completion；传入当前的对话消息和工具定义
     response = completion(
-        model=model_name,
+        **_build_completion_kwargs(model_name),
         messages=state["messages"],
         tools=registry.schemas(),
         tool_choice="auto",
-        temperature=0,
     )
 
     # 提取模型返回的消息结构（忽略 None 字段）并追加到消息列表中
@@ -94,9 +141,9 @@ def call_tools(state: AgentState, registry: ToolRegistry) -> AgentState:
 
     # 遍历模型发起的所有工具调用（如果没有则不会进入循环）
     for tool_call in last.get("tool_calls", []):
-        fn = tool_call["function"]
+        invocation = ToolRouter.build_tool_invocation(tool_call)
         # registry.execute 的返回值为 ToolResult(ok, content, metadata)
-        result = registry.execute(name=fn["name"], arguments=fn.get("arguments", "{}"))
+        result = registry.execute(name=invocation.name, arguments=invocation.arguments)
         ok = result.ok
         content = result.content
         if not ok:
@@ -107,8 +154,8 @@ def call_tools(state: AgentState, registry: ToolRegistry) -> AgentState:
         new_messages.append(
             {
                 "role": "tool",
-                "tool_call_id": tool_call["id"],
-                "name": fn["name"],
+                "tool_call_id": invocation.call_id,
+                "name": invocation.name,
                 "content": content,
             }
         )
@@ -153,12 +200,8 @@ def main() -> None:
     # 从 .env 文件加载环境变量（如果存在）
     load_dotenv()
 
-    # 校验必要的 API Key，根据 provider 不同检查不同的环境变量
-    provider = os.getenv("MODEL_PROVIDER", "openai")
-    if provider == "openai" and not os.getenv("OPENAI_API_KEY"):
-        raise RuntimeError("缺少 OPENAI_API_KEY，请先在 .env 中配置")
-    if provider == "deepseek" and not os.getenv("DEEPSEEK_API_KEY"):
-        raise RuntimeError("缺少 DEEPSEEK_API_KEY，请先在 .env 中配置")
+    if not os.getenv("API_KEY"):
+        raise RuntimeError("缺少 API_KEY，请先在 .env 中配置")
 
     # 构建状态机应用
     project_root = Path(__file__).parent.resolve()
