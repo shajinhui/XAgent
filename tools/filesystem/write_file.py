@@ -41,8 +41,7 @@ def run(ctx: ToolExecutionContext, payload: dict) -> str:
     """写入文件；调用方必须先通过工具审批。"""
 
     args = WriteFileArgs(**payload)
-    path = ctx.policy.resolve_path(args.path)
-    ctx.policy.ensure_writable_path(path)
+    path = ctx.policy.resolve_write_path(args.path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     mode = "a" if args.append else "w"

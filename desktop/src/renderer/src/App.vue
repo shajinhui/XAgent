@@ -10,12 +10,12 @@ import { useRuntimeStore } from '@renderer/stores/runtime'
 import type { RuntimeSessionSummary, RuntimeWorkspaceProject } from '@renderer/types/runtimeEvents'
 
 type ConversationSessionItem = RuntimeSessionSummary & {
-  workspaceRoot: string
+  selectedRoot: string
 }
 
 type SessionContextMenu = {
   session: RuntimeSessionSummary
-  workspaceRoot: string
+  selectedRoot: string
   x: number
   y: number
 }
@@ -34,15 +34,15 @@ const SIDEBAR_WIDTH_STORAGE_KEY = 'codex-mini.sidebar-width'
 
 const visibleProjects = computed(() => runtime.workspaceProjects)
 const conversationSessions = computed<ConversationSessionItem[]>(() => {
-  const sessions = runtime.conversationWorkspaceRoots.flatMap((root) => {
+  const sessions = runtime.conversationSelectedRoots.flatMap((root) => {
     const workspaceSessions =
-      runtime.workspace?.root === root && runtime.sessionHistory.length
+      runtime.workspace?.selected_root === root && runtime.sessionHistory.length
         ? runtime.sessionHistory
-        : runtime.sessionsByWorkspaceRoot[root] || []
+        : runtime.sessionsBySelectedRoot[root] || []
 
     return workspaceSessions.map((session) => ({
       ...session,
-      workspaceRoot: root
+      selectedRoot: root
     }))
   })
 
@@ -79,20 +79,20 @@ function toggleProjectConversation(root: string): void {
 }
 
 function sessionsForProject(root: string): RuntimeSessionSummary[] {
-  if (runtime.workspace?.root === root) {
-    const cachedSessions = runtime.sessionsByWorkspaceRoot[root] || []
+  if (runtime.workspace?.selected_root === root) {
+    const cachedSessions = runtime.sessionsBySelectedRoot[root] || []
     return cachedSessions.length ? cachedSessions : runtime.sessionHistory
   }
-  return runtime.sessionsByWorkspaceRoot[root] || []
+  return runtime.sessionsBySelectedRoot[root] || []
 }
 
 async function openProject(project: RuntimeWorkspaceProject): Promise<void> {
-  if (runtime.workspace?.root === project.root) return
-  await runtime.openWorkspace(project.root)
+  if (runtime.workspace?.selected_root === project.selected_root) return
+  await runtime.openWorkspace(project.selected_root)
 }
 
 async function startProjectConversation(project: RuntimeWorkspaceProject): Promise<void> {
-  await runtime.startNewConversationInWorkspace(project.root)
+  await runtime.startNewConversationInWorkspace(project.selected_root)
 }
 
 function clampSidebarWidth(value: number): number {
@@ -138,14 +138,14 @@ function startSidebarResize(event: PointerEvent): void {
 function openSessionContextMenu(
   event: MouseEvent,
   session: RuntimeSessionSummary,
-  workspaceRoot: string
+  selectedRoot: string
 ): void {
   event.preventDefault()
   event.stopPropagation()
 
   sessionContextMenu.value = {
     session,
-    workspaceRoot,
+    selectedRoot,
     x: Math.max(8, Math.min(event.clientX, window.innerWidth - 168)),
     y: Math.max(8, Math.min(event.clientY, window.innerHeight - 74))
   }
@@ -163,7 +163,7 @@ async function deleteContextSession(): Promise<void> {
   const confirmed = window.confirm(`删除会话“${target.session.title}”？此操作会删除本地记录。`)
   if (!confirmed) return
 
-  await runtime.deleteSessionInWorkspace(target.workspaceRoot, target.session.session_id)
+  await runtime.deleteSessionInWorkspace(target.selectedRoot, target.session.session_id)
 }
 
 function handleGlobalKeydown(event: KeyboardEvent): void {
@@ -174,7 +174,7 @@ function handleGlobalKeydown(event: KeyboardEvent): void {
 
 async function openWorkspaceFromDialog(): Promise<void> {
   try {
-    const selectedPath = await window.api.openWorkspaceDirectory(runtime.workspace?.root)
+    const selectedPath = await window.api.openWorkspaceDirectory(runtime.workspace?.selected_root)
     if (!selectedPath) return
     await runtime.openWorkspace(selectedPath)
   } catch (error) {
@@ -321,7 +321,7 @@ onBeforeUnmount(() => {
           <template v-if="projectsExpanded">
             <div
               v-for="project in visibleProjects"
-              :key="project.root"
+              :key="project.selected_root"
               class="sidebar-project-block"
             >
               <div class="sidebar-project-row">
@@ -329,12 +329,12 @@ onBeforeUnmount(() => {
                   type="button"
                   class="sidebar-project"
                   :class="{
-                    collapsed: !isProjectExpanded(project.root),
-                    active: runtime.workspace?.root === project.root
+                    collapsed: !isProjectExpanded(project.selected_root),
+                    active: runtime.workspace?.selected_root === project.selected_root
                   }"
-                  :title="project.root"
-                  :aria-expanded="isProjectExpanded(project.root)"
-                  @click="toggleProjectConversation(project.root)"
+                  :title="project.selected_root"
+                  :aria-expanded="isProjectExpanded(project.selected_root)"
+                  @click="toggleProjectConversation(project.selected_root)"
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M3.5 6.5h6l2 2h9v10h-17v-12Z" />
@@ -368,27 +368,27 @@ onBeforeUnmount(() => {
                 </button>
               </div>
 
-              <div v-if="isProjectExpanded(project.root)" class="sidebar-session-group">
+              <div v-if="isProjectExpanded(project.selected_root)" class="sidebar-session-group">
                 <button
-                  v-for="session in sessionsForProject(project.root)"
+                  v-for="session in sessionsForProject(project.selected_root)"
                   :key="session.session_id"
                   type="button"
                   class="sidebar-item"
                   :class="{ selected: session.session_id === runtime.selectedSessionId }"
                   :title="session.last_message || session.title"
-                  @click="void runtime.resumeSessionInWorkspace(project.root, session.session_id)"
-                  @contextmenu="openSessionContextMenu($event, session, project.root)"
+                  @click="void runtime.resumeSessionInWorkspace(project.selected_root, session.session_id)"
+                  @contextmenu="openSessionContextMenu($event, session, project.selected_root)"
                 >
                   <span>{{ session.title }}</span>
                   <small>{{ formatSessionUpdatedAt(session.updated_at) }}</small>
                 </button>
                 <p
-                  v-if="runtime.sessionsLoading && runtime.workspace?.root === project.root"
+                  v-if="runtime.sessionsLoading && runtime.workspace?.selected_root === project.selected_root"
                   class="sidebar-empty"
                 >
                   正在加载
                 </p>
-                <p v-else-if="!sessionsForProject(project.root).length" class="sidebar-empty">
+                <p v-else-if="!sessionsForProject(project.selected_root).length" class="sidebar-empty">
                   暂无历史会话
                 </p>
               </div>
@@ -423,9 +423,9 @@ onBeforeUnmount(() => {
             :class="{ selected: session.session_id === runtime.selectedSessionId }"
             :title="session.last_message || session.title"
             @click="
-              void runtime.resumeSessionInWorkspace(session.workspaceRoot, session.session_id)
+              void runtime.resumeSessionInWorkspace(session.selectedRoot, session.session_id)
             "
-            @contextmenu="openSessionContextMenu($event, session, session.workspaceRoot)"
+            @contextmenu="openSessionContextMenu($event, session, session.selectedRoot)"
           >
             <span>{{ session.title }}</span>
             <small>{{ formatSessionUpdatedAt(session.updated_at) }}</small>

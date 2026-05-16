@@ -7,20 +7,52 @@ from pathlib import Path
 
 from sandbox.macos_executor import SecureMacOSSandboxExecutor
 from security.circuit_breaker import CircuitBreaker
+from security.permissions import ApprovalPolicy, FileSystemPolicy, NetworkPolicy, PermissionProfile
 from security.policy import SecurityPolicy
 from tools.core.context import ToolInvocation
 from tools.core.registry import ToolRegistry
 from tools.core.types import ToolExecutionContext, ToolPermissionError, ToolResult
 
 
-def create_tool_context(project_root: Path, session_id: str = "default") -> ToolExecutionContext:
-    root = project_root.resolve()
+def create_tool_context(
+    selected_root: Path,
+    session_id: str = "default",
+    *,
+    project_root: Path | None = None,
+    current_dir: Path | None = None,
+    filesystem_policy: FileSystemPolicy | None = None,
+    network_policy: NetworkPolicy = NetworkPolicy.RESTRICTED,
+    permission_profile: PermissionProfile = PermissionProfile.WORKSPACE_WRITE,
+    approval_policy: ApprovalPolicy = ApprovalPolicy.ASK_BEFORE_MUTATING,
+) -> ToolExecutionContext:
+    selected = selected_root.resolve()
+    project = (project_root or selected).resolve()
+    current = (current_dir or selected).resolve()
+    resolved_filesystem_policy = filesystem_policy or _filesystem_policy_for_profile(
+        selected,
+        current,
+        permission_profile,
+    )
+    policy = SecurityPolicy(
+        selected,
+        project_root=project,
+        current_dir=current,
+        filesystem_policy=resolved_filesystem_policy,
+        permission_profile=permission_profile,
+        approval_policy=approval_policy,
+    )
     return ToolExecutionContext(
-        project_root=root,
+        selected_root=selected,
+        project_root=project,
+        current_dir=current,
         session_id=session_id,
-        policy=SecurityPolicy(root),
+        policy=policy,
+        filesystem_policy=resolved_filesystem_policy,
+        network_policy=network_policy,
+        permission_profile=permission_profile,
+        approval_policy=approval_policy,
         circuit_breaker=CircuitBreaker(threshold=3),
-        command_executor=SecureMacOSSandboxExecutor(root),
+        command_executor=SecureMacOSSandboxExecutor(selected),
     )
 
 
@@ -36,6 +68,8 @@ class ToolRunner:
         invocation: ToolInvocation,
         approved: bool | None = None,
     ) -> ToolResult:
+        """Execute a routed invocation and keep invocation-scoped side effects together."""
+
         is_approved = invocation.approval.approved if approved is None else approved
         result = self.execute(invocation.name, invocation.arguments, approved=is_approved)
         if result.ok:
@@ -98,6 +132,12 @@ class ToolRunner:
             )
 
     def _record_invocation_diff(self, invocation: ToolInvocation) -> None:
+        """Record simple touched-path evidence for mutating tools.
+
+        This is intentionally conservative for now: it records obvious `path`/`cwd`
+        arguments so the turn can later expose what the model changed.
+        """
+
         tool = self.registry.get(invocation.name)
         if tool is None or not tool.meta.is_mutating:
             return
@@ -107,7 +147,7 @@ class ToolRunner:
         except json.JSONDecodeError:
             return
 
-        root = invocation.workspace_root or self.ctx.project_root
+        root = invocation.current_dir or self.ctx.current_dir
         for key in ("path", "cwd"):
             raw_path = payload.get(key)
             if isinstance(raw_path, str) and raw_path.strip():
@@ -115,3 +155,13 @@ class ToolRunner:
                 if not path.is_absolute():
                     path = root / path
                 invocation.diff_tracker.record_path(path.resolve())
+
+
+def _filesystem_policy_for_profile(
+    selected_root: Path,
+    current_dir: Path,
+    permission_profile: PermissionProfile,
+) -> FileSystemPolicy:
+    if permission_profile == PermissionProfile.READ_ONLY:
+        return FileSystemPolicy.read_only(selected_root, current_dir=current_dir)
+    return FileSystemPolicy.workspace_write(selected_root, current_dir=current_dir)

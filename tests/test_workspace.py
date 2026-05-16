@@ -6,7 +6,7 @@ from pathlib import Path
 
 from server.app import build_system_prompt
 from server.runtime.session_state import create_websocket_session, persist_websocket_session
-from workspace import WorkspaceManager, WorkspaceValidationError, validate_workspace_path
+from workspace import TrustLevel, WorkspaceManager, WorkspaceValidationError, validate_workspace_path
 
 
 class WorkspaceValidationTests(unittest.TestCase):
@@ -56,10 +56,44 @@ class WorkspaceValidationTests(unittest.TestCase):
 
             workspace = WorkspaceManager(nested).open()
 
-            self.assertEqual(workspace.root, nested.resolve())
+            self.assertEqual(workspace.selected_root, nested.resolve())
+            self.assertEqual(workspace.project_root, root.resolve())
             self.assertEqual(workspace.current_dir, nested.resolve())
             self.assertEqual(workspace.git_root, root.resolve())
+            self.assertEqual(workspace.trust.level, TrustLevel.SESSION_ONLY)
+            self.assertEqual(workspace.trust.trust_key, root.resolve().as_posix())
             self.assertIsNotNone(workspace.session_store)
+            assert workspace.session_store is not None
+            self.assertEqual(workspace.session_store.project_root, root.resolve())
+
+    def test_workspace_manager_uses_selected_root_for_non_git_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            selected = Path(tmp)
+
+            workspace = WorkspaceManager(selected).open()
+
+            self.assertEqual(workspace.selected_root, selected.resolve())
+            self.assertEqual(workspace.project_root, selected.resolve())
+            self.assertEqual(workspace.current_dir, selected.resolve())
+            self.assertIsNone(workspace.git_root)
+
+    def test_workspace_payload_contains_v2_snapshot_and_compat_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            nested = root / "packages" / "app"
+            nested.mkdir(parents=True)
+            (root / ".git").mkdir()
+
+            workspace = WorkspaceManager(nested).open()
+            payload = workspace.as_dict()
+
+            self.assertEqual(payload["selected_root"], nested.resolve().as_posix())
+            self.assertEqual(payload["project_root"], root.resolve().as_posix())
+            self.assertEqual(payload["current_dir"], nested.resolve().as_posix())
+            self.assertEqual(payload["git_root"], root.resolve().as_posix())
+            self.assertEqual(payload["trust"]["level"], "session_only")
+            self.assertEqual(payload["trust"]["trust_key"], root.resolve().as_posix())
+            self.assertEqual(payload["additional_roots"], [])
 
     def test_create_websocket_session_binds_registry_to_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -72,7 +106,8 @@ class WorkspaceValidationTests(unittest.TestCase):
 
             self.assertEqual(session_state.session_id, session_id)
             self.assertTrue(registry.has_tool("read_file"))
-            self.assertEqual(runner.ctx.project_root, workspace.root)
+            self.assertEqual(runner.ctx.selected_root, workspace.selected_root)
+            self.assertEqual(runner.ctx.project_root, workspace.project_root)
             self.assertEqual(history.messages[0]["role"], "system")
             self.assertIsNotNone(workspace.session_store)
             assert workspace.session_store is not None
@@ -81,7 +116,18 @@ class WorkspaceValidationTests(unittest.TestCase):
                 workspace.session_store.get_session(session_id)
 
             record = persist_websocket_session(workspace.session_store, session_id, workspace)
-            self.assertEqual(record.metadata["workspace"]["root"], workspace.root.as_posix())
+            self.assertEqual(
+                record.metadata["workspace"]["selected_root"],
+                workspace.selected_root.as_posix(),
+            )
+            self.assertEqual(
+                record.metadata["workspace"]["project_root"],
+                workspace.project_root.as_posix(),
+            )
+            self.assertEqual(
+                record.metadata["workspace"]["trust"]["level"],
+                TrustLevel.SESSION_ONLY.value,
+            )
 
 
 if __name__ == "__main__":

@@ -108,7 +108,13 @@ def run(ctx: ToolExecutionContext, payload: dict) -> str:
             },
         )
 
-    result = ctx.command_executor.run(args.command, timeout_seconds=args.timeout, cwd=command_cwd)
+    result = ctx.command_executor.run(
+        args.command,
+        filesystem_policy=ctx.filesystem_policy,
+        network_policy=ctx.network_policy,
+        timeout_seconds=args.timeout,
+        cwd=command_cwd,
+    )
     if result.ok:
         ctx.circuit_breaker.record_success(ctx.session_id, "dangerous_shell")
 
@@ -124,7 +130,7 @@ def _display_cwd(ctx: ToolExecutionContext, cwd: Path) -> str:
     """把 cwd 转成前端更容易阅读的相对路径。"""
 
     try:
-        relative = cwd.relative_to(ctx.project_root)
+        relative = cwd.relative_to(ctx.selected_root)
     except ValueError:
         return cwd.as_posix()
     if relative.as_posix() == ".":

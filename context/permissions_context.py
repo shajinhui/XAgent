@@ -1,5 +1,9 @@
-"""Permission and sandbox context for a turn."""
+"""
+用于 turn 的权限与沙箱上下文（中文注释）。
 
+该模块定义了执行工具和命令时需要携带的安全相关快照，包含受保护路径、
+审批策略与是否允许网络等配置，便于在生成模型上下文或执行前校验权限。
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,10 +18,14 @@ DEFAULT_PROTECTED_PATHS = (".env", ".git", ".venv", "__pycache__", ".codex-mini"
 
 @dataclass(frozen=True)
 class PermissionsContext:
-    """Snapshot of the safety envelope active for a turn."""
+    """表示一次 turn 的安全边界快照（不可变）。
 
-    workspace_root: Path
-    allowed_roots: tuple[Path, ...]
+    用于把工作区相关的安全策略以不可变结构传入模型或工具执行层。
+    """
+
+    selected_root: Path
+    project_root: Path
+    additional_roots: tuple[Dict[str, Any], ...]
     protected_paths: tuple[str, ...] = DEFAULT_PROTECTED_PATHS
     approval_policy: str = "ask-before-mutating"
     command_sandbox: str = "macos-seatbelt"
@@ -26,14 +34,16 @@ class PermissionsContext:
     @classmethod
     def from_workspace(cls, workspace: WorkspaceContext) -> "PermissionsContext":
         return cls(
-            workspace_root=workspace.root,
-            allowed_roots=tuple(workspace.allowed_roots),
+            selected_root=workspace.selected_root,
+            project_root=workspace.project_root,
+            additional_roots=tuple(root.as_dict() for root in workspace.additional_roots),
         )
 
     def as_dict(self) -> Dict[str, Any]:
         return {
-            "workspace_root": self.workspace_root.as_posix(),
-            "allowed_roots": [path.as_posix() for path in self.allowed_roots],
+            "selected_root": self.selected_root.as_posix(),
+            "project_root": self.project_root.as_posix(),
+            "additional_roots": list(self.additional_roots),
             "protected_paths": list(self.protected_paths),
             "approval_policy": self.approval_policy,
             "command_sandbox": self.command_sandbox,
@@ -41,6 +51,7 @@ class PermissionsContext:
         }
 
     def render_fragment(self) -> str:
+        """渲染为可读字符串，便于在模型提示或日志中显示权限摘要。"""
         return (
             f"Approval policy: {self.approval_policy}\n"
             f"Command sandbox: {self.command_sandbox}\n"

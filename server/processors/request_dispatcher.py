@@ -222,7 +222,7 @@ class WebSocketRequestDispatcher:
             return
 
         deleted_current = (
-            target_workspace.root == self.context.workspace.root
+            target_workspace.project_root == self.context.workspace.project_root
             and target_session_id == self.context.session_id
         )
         if deleted_current:

@@ -27,12 +27,27 @@ export type RuntimeToolMetadata = {
 
 export type RuntimeToolMetadataMap = Record<string, RuntimeToolMetadata>
 
+export type RuntimeWorkspaceTrust = {
+  level: 'trusted' | 'untrusted' | 'session_only'
+  trust_key: string
+  source: 'default' | 'user_config' | 'session'
+  project_config_enabled: boolean
+}
+
+export type RuntimeAdditionalRoot = {
+  path: string
+  access: 'read' | 'write'
+  source: 'user' | 'session' | 'config'
+}
+
 export type RuntimeWorkspace = {
-  root: string
+  selected_root: string
+  project_root: string
   current_dir: string
   display_name: string
   git_root: string | null
-  allowed_roots: string[]
+  trust: RuntimeWorkspaceTrust
+  additional_roots: RuntimeAdditionalRoot[]
 }
 
 export type RuntimeWorkspaceProject = RuntimeWorkspace & {

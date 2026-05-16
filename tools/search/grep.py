@@ -42,16 +42,16 @@ def run(ctx: ToolExecutionContext, payload: dict) -> str:
     """优先使用 ripgrep 搜索，缺失时回退到系统 grep。"""
 
     args = GrepArgs(**payload)
-    search_root = ctx.policy.resolve_path(args.path)
+    search_root = ctx.policy.resolve_read_path(args.path)
 
     rg_cmd = ["rg", "-n", "--max-count", str(args.max_count), args.pattern, str(search_root)]
     grep_cmd = ["grep", "-R", "-n", args.pattern, str(search_root)]
 
     try:
-        proc = subprocess.run(rg_cmd, capture_output=True, text=True, cwd=ctx.project_root)
+        proc = subprocess.run(rg_cmd, capture_output=True, text=True, cwd=ctx.current_dir)
     except FileNotFoundError:
         # 一些极简环境没有 rg，保留 grep 回退保证工具可用。
-        proc = subprocess.run(grep_cmd, capture_output=True, text=True, cwd=ctx.project_root)
+        proc = subprocess.run(grep_cmd, capture_output=True, text=True, cwd=ctx.current_dir)
 
     out = proc.stdout.strip()
     err = proc.stderr.strip()

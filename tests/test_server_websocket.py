@@ -41,6 +41,66 @@ class ServerWebSocketTests(unittest.TestCase):
             self.assertEqual(error["received_type"], "invalid_json")
             self.assertEqual(contexts[-1].session_store.list_sessions(), [])
 
+    def test_ready_workspace_payload_contains_v2_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            contexts = []
+            original_create = WebSocketRuntimeContext.create
+
+            def create_temp_context(project_root, system_prompt):
+                context = original_create(Path(tmp), system_prompt)
+                contexts.append(context)
+                return context
+
+            with patch("server.app.WebSocketRuntimeContext.create", side_effect=create_temp_context):
+                with TestClient(app) as client:
+                    with client.websocket_connect("/agent/ws") as ws:
+                        ready = ws.receive_json()
+
+            workspace = ready["workspace"]
+            self.assertEqual(workspace["selected_root"], Path(tmp).resolve().as_posix())
+            self.assertEqual(workspace["project_root"], Path(tmp).resolve().as_posix())
+            self.assertEqual(workspace["trust"]["level"], "session_only")
+            self.assertEqual(workspace["additional_roots"], [])
+            self.assertEqual(contexts[-1].workspace.project_root, Path(tmp).resolve())
+
+    def test_open_workspace_payload_separates_selected_and_project_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            default_root = Path(tmp) / "default"
+            default_root.mkdir()
+            repo_root = Path(tmp) / "repo"
+            nested = repo_root / "packages" / "app"
+            nested.mkdir(parents=True)
+            (repo_root / ".git").mkdir()
+
+            contexts = []
+            original_create = WebSocketRuntimeContext.create
+
+            def create_temp_context(project_root, system_prompt):
+                context = original_create(default_root, system_prompt)
+                contexts.append(context)
+                return context
+
+            with patch("server.app.WebSocketRuntimeContext.create", side_effect=create_temp_context):
+                with TestClient(app) as client:
+                    with client.websocket_connect("/agent/ws") as ws:
+                        ready = ws.receive_json()
+                        ws.send_json(
+                            {
+                                "type": "open_workspace",
+                                "path": nested.as_posix(),
+                                "request_id": "workspace-1",
+                            }
+                        )
+                        changed = ws.receive_json()
+
+            self.assertEqual(ready["type"], "ready")
+            self.assertEqual(changed["type"], "workspace_changed")
+            self.assertEqual(changed["workspace"]["selected_root"], nested.resolve().as_posix())
+            self.assertEqual(changed["workspace"]["project_root"], repo_root.resolve().as_posix())
+            self.assertEqual(changed["workspace"]["git_root"], repo_root.resolve().as_posix())
+            self.assertEqual(changed["previous_workspace"]["selected_root"], default_root.resolve().as_posix())
+            self.assertEqual(contexts[-1].workspace.project_root, repo_root.resolve())
+
     def test_first_user_input_persists_session_and_returns_final_answer(self) -> None:
         async def fake_run_turn(
             ws,

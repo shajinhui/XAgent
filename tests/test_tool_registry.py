@@ -256,6 +256,8 @@ class ToolRegistryTests(unittest.TestCase):
             self.assertTrue(result.ok)
             self.assertIn("cwd: desktop", result.content)
             self.assertEqual(run_mock.call_args.kwargs["cwd"], nested.resolve())
+            self.assertIs(run_mock.call_args.kwargs["filesystem_policy"], runner.ctx.filesystem_policy)
+            self.assertEqual(run_mock.call_args.kwargs["network_policy"], runner.ctx.network_policy)
 
     def test_mutating_file_tool_requires_approval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -284,6 +286,33 @@ class ToolRegistryTests(unittest.TestCase):
 
             self.assertTrue(result.ok)
             self.assertEqual((root / "created.txt").read_text(encoding="utf-8"), "hello")
+
+    def test_read_file_denies_env_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".env").write_text("API_KEY=secret", encoding="utf-8")
+            _registry, runner = build_default_runner(root)
+
+            result = runner.execute("read_file", json.dumps({"path": ".env"}))
+
+            self.assertFalse(result.ok)
+            self.assertEqual(result.metadata["error_type"], "permission_denied")
+            self.assertIn("禁止读取", result.content)
+
+    def test_write_file_denies_codex_mini_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _registry, runner = build_default_runner(root)
+
+            result = runner.execute(
+                "write_file",
+                json.dumps({"path": ".codex-mini/sessions/index.sqlite", "content": "oops"}),
+                approved=True,
+            )
+
+            self.assertFalse(result.ok)
+            self.assertEqual(result.metadata["error_type"], "permission_denied")
+            self.assertFalse((root / ".codex-mini" / "sessions" / "index.sqlite").exists())
 
 
 if __name__ == "__main__":

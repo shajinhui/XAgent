@@ -38,7 +38,7 @@ def run(ctx: ToolExecutionContext, payload: dict) -> str:
     """读取文件内容；路径必须经过 workspace 边界校验。"""
 
     args = ReadFileArgs(**payload)
-    path = ctx.policy.resolve_path(args.path)
+    path = ctx.policy.resolve_read_path(args.path)
     if not path.exists():
         raise FileNotFoundError(f"文件不存在: {path}")
     if path.is_dir():

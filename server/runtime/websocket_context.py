@@ -22,7 +22,11 @@ from workspace import WorkspaceContext, WorkspaceManager
 
 @dataclass
 class WebSocketRuntimeContext:
-    """聚合当前连接绑定的 workspace、session store、registry 和模型消息。"""
+    """聚合当前 WebSocket 连接绑定的可变状态。
+
+    这是连接级上下文：它会随着 open_workspace、new_session、resume_session 改变。
+    单轮 user_input 的不可散传参数会再收束到 `session.turn_context.TurnContext`。
+    """
 
     workspace_manager: WorkspaceManager
     workspace: WorkspaceContext
@@ -37,10 +41,14 @@ class WebSocketRuntimeContext:
 
     @property
     def messages(self) -> List[Dict[str, Any]]:
+        """兼容少量旧调用方；正式的模型历史入口是 `history`。"""
+
         return self.history.messages
 
     @messages.setter
     def messages(self, messages: List[Dict[str, Any]]) -> None:
+        """把恢复出的 message 列表重新包装为 ContextManager。"""
+
         self.history = ContextManager.from_messages(messages)
 
     @classmethod
@@ -106,7 +114,12 @@ class WebSocketRuntimeContext:
         self.registry = build_default_registry()
         self.runner = ToolRunner(
             self.registry,
-            create_tool_context(self.workspace.root, session_id),
+            create_tool_context(
+                self.workspace.selected_root,
+                session_id,
+                project_root=self.workspace.project_root,
+                current_dir=self.workspace.current_dir,
+            ),
         )
         self.session_persisted = True
         return (

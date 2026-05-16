@@ -11,9 +11,11 @@ import type {
   RuntimeReasoningEffort,
   RuntimeSessionState,
   RuntimeSessionSummary,
+  RuntimeAdditionalRoot,
   RuntimeToolMetadataMap,
   RuntimeWorkspace,
-  RuntimeWorkspaceProject
+  RuntimeWorkspaceProject,
+  RuntimeWorkspaceTrust
 } from '@renderer/types/runtimeEvents'
 
 const DEFAULT_ENDPOINT = import.meta.env.VITE_AGENT_WS_URL || 'ws://127.0.0.1:8000/agent/ws'
@@ -148,13 +150,13 @@ function clearReconnectTimer(): void {
   reconnectTimer = null
 }
 
-function normalizeWorkspaceRoot(root: string): string {
+function normalizeSelectedRoot(root: string): string {
   return root.replace(/[\\/]+$/, '')
 }
 
-function isDefaultConversationWorkspaceRoot(root: string): boolean {
+function isDefaultConversationSelectedRoot(root: string): boolean {
   return /[\\/]Documents[\\/]Codex[\\/]\d{4}-\d{2}-\d{2}[\\/]new-chat$/.test(
-    normalizeWorkspaceRoot(root)
+    normalizeSelectedRoot(root)
   )
 }
 
@@ -204,11 +206,11 @@ function loadStoredWorkspaceProjectCandidates(): unknown[] {
 function loadWorkspaceProjects(): RuntimeWorkspaceProject[] {
   return loadStoredWorkspaceProjectCandidates()
     .filter(isWorkspaceProject)
-    .filter((project) => !isDefaultConversationWorkspaceRoot(project.root))
+    .filter((project) => !isDefaultConversationSelectedRoot(project.selected_root))
     .slice(0, MAX_WORKSPACE_PROJECTS)
 }
 
-function loadConversationWorkspaceRoots(): string[] {
+function loadConversationSelectedRoots(): string[] {
   const roots = new Set<string>()
 
   try {
@@ -217,7 +219,7 @@ function loadConversationWorkspaceRoots(): string[] {
     if (Array.isArray(parsed)) {
       parsed.forEach((root) => {
         if (typeof root === 'string' && root.trim()) {
-          roots.add(normalizeWorkspaceRoot(root.trim()))
+          roots.add(normalizeSelectedRoot(root.trim()))
         }
       })
     }
@@ -227,8 +229,8 @@ function loadConversationWorkspaceRoots(): string[] {
 
   loadStoredWorkspaceProjectCandidates().forEach((value) => {
     if (!isWorkspaceProject(value)) return
-    if (isDefaultConversationWorkspaceRoot(value.root)) {
-      roots.add(normalizeWorkspaceRoot(value.root))
+    if (isDefaultConversationSelectedRoot(value.selected_root)) {
+      roots.add(normalizeSelectedRoot(value.selected_root))
     }
   })
 
@@ -245,7 +247,7 @@ function loadWorkspaceSessionCache(): Record<string, RuntimeSessionSummary[]> {
       Object.entries(parsed)
         .filter(([root, sessions]) => typeof root === 'string' && Array.isArray(sessions))
         .map(([root, sessions]) => [
-          normalizeWorkspaceRoot(root),
+          normalizeSelectedRoot(root),
           (sessions as unknown[]).filter(isSessionSummary).slice(0, 50)
         ])
     )
@@ -254,14 +256,45 @@ function loadWorkspaceSessionCache(): Record<string, RuntimeSessionSummary[]> {
   }
 }
 
+function isWorkspaceTrust(value: unknown): value is RuntimeWorkspaceTrust {
+  if (typeof value !== 'object' || value === null) return false
+  const candidate = value as Partial<RuntimeWorkspaceTrust>
+  return (
+    (candidate.level === 'trusted' ||
+      candidate.level === 'untrusted' ||
+      candidate.level === 'session_only') &&
+    typeof candidate.trust_key === 'string' &&
+    (candidate.source === 'default' ||
+      candidate.source === 'user_config' ||
+      candidate.source === 'session') &&
+    typeof candidate.project_config_enabled === 'boolean'
+  )
+}
+
+function isAdditionalRoot(value: unknown): value is RuntimeAdditionalRoot {
+  if (typeof value !== 'object' || value === null) return false
+  const candidate = value as Partial<RuntimeAdditionalRoot>
+  return (
+    typeof candidate.path === 'string' &&
+    (candidate.access === 'read' || candidate.access === 'write') &&
+    (candidate.source === 'user' ||
+      candidate.source === 'session' ||
+      candidate.source === 'config')
+  )
+}
+
 function isWorkspaceProject(value: unknown): value is RuntimeWorkspaceProject {
   if (typeof value !== 'object' || value === null) return false
   const candidate = value as Partial<RuntimeWorkspaceProject>
   return (
-    typeof candidate.root === 'string' &&
+    typeof candidate.selected_root === 'string' &&
+    typeof candidate.project_root === 'string' &&
     typeof candidate.current_dir === 'string' &&
     typeof candidate.display_name === 'string' &&
-    Array.isArray(candidate.allowed_roots) &&
+    (typeof candidate.git_root === 'string' || candidate.git_root === null) &&
+    isWorkspaceTrust(candidate.trust) &&
+    Array.isArray(candidate.additional_roots) &&
+    candidate.additional_roots.every(isAdditionalRoot) &&
     typeof candidate.updated_at === 'number'
   )
 }
@@ -296,10 +329,10 @@ export const useRuntimeStore = defineStore('runtime', {
     selectedSessionId: '',
     workspace: null as RuntimeWorkspace | null,
     workspaceProjects: loadWorkspaceProjects(),
-    conversationWorkspaceRoots: loadConversationWorkspaceRoots(),
-    sessionsByWorkspaceRoot: loadWorkspaceSessionCache(),
-    pendingWorkspaceResume: null as { root: string; sessionId: string } | null,
-    pendingConversationWorkspaceRoot: null as string | null,
+    conversationSelectedRoots: loadConversationSelectedRoots(),
+    sessionsBySelectedRoot: loadWorkspaceSessionCache(),
+    pendingWorkspaceResume: null as { selected_root: string; sessionId: string } | null,
+    pendingConversationSelectedRoot: null as string | null,
     selectedModel: FALLBACK_MODEL_OPTIONS[0],
     modelOptions: [...FALLBACK_MODEL_OPTIONS],
     reasoningEffort: 'off' as RuntimeReasoningEffort,
@@ -428,7 +461,7 @@ export const useRuntimeStore = defineStore('runtime', {
       try {
         window.localStorage.setItem(
           CONVERSATION_WORKSPACES_STORAGE_KEY,
-          JSON.stringify(this.conversationWorkspaceRoots)
+          JSON.stringify(this.conversationSelectedRoots)
         )
       } catch {
         // Conversation roots are rediscovered when a new-chat workspace is opened.
@@ -436,24 +469,24 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     isConversationWorkspace(root: string): boolean {
-      const normalizedRoot = normalizeWorkspaceRoot(root)
+      const normalizedRoot = normalizeSelectedRoot(root)
       return (
-        isDefaultConversationWorkspaceRoot(normalizedRoot) ||
-        this.conversationWorkspaceRoots.includes(normalizedRoot) ||
-        this.pendingConversationWorkspaceRoot === normalizedRoot
+        isDefaultConversationSelectedRoot(normalizedRoot) ||
+        this.conversationSelectedRoots.includes(normalizedRoot) ||
+        this.pendingConversationSelectedRoot === normalizedRoot
       )
     },
 
     rememberConversationWorkspace(root: string): void {
-      const normalizedRoot = normalizeWorkspaceRoot(root)
+      const normalizedRoot = normalizeSelectedRoot(root)
       if (!normalizedRoot) return
 
-      this.conversationWorkspaceRoots = [
+      this.conversationSelectedRoots = [
         normalizedRoot,
-        ...this.conversationWorkspaceRoots.filter((item) => item !== normalizedRoot)
+        ...this.conversationSelectedRoots.filter((item) => item !== normalizedRoot)
       ].slice(0, MAX_CONVERSATION_WORKSPACES)
       this.workspaceProjects = this.workspaceProjects.filter(
-        (item) => normalizeWorkspaceRoot(item.root) !== normalizedRoot
+        (item) => normalizeSelectedRoot(item.selected_root) !== normalizedRoot
       )
       this.persistConversationWorkspaces()
       this.persistWorkspaceProjects()
@@ -462,37 +495,37 @@ export const useRuntimeStore = defineStore('runtime', {
     rememberWorkspace(workspace?: RuntimeWorkspace | null): void {
       if (!workspace) return
 
-      const root = normalizeWorkspaceRoot(workspace.root)
-      if (this.isConversationWorkspace(root)) {
-        this.rememberConversationWorkspace(root)
+      const selectedRoot = normalizeSelectedRoot(workspace.selected_root)
+      if (this.isConversationWorkspace(selectedRoot)) {
+        this.rememberConversationWorkspace(selectedRoot)
         return
       }
 
       const project: RuntimeWorkspaceProject = {
         ...workspace,
-        root,
+        selected_root: selectedRoot,
         updated_at: Date.now()
       }
       this.workspaceProjects = [
         project,
-        ...this.workspaceProjects.filter((item) => item.root !== root)
+        ...this.workspaceProjects.filter((item) => item.selected_root !== selectedRoot)
       ].slice(0, MAX_WORKSPACE_PROJECTS)
       this.persistWorkspaceProjects()
     },
 
     cacheWorkspaceSessions(root: string, sessions: RuntimeSessionSummary[]): void {
-      const normalizedRoot = normalizeWorkspaceRoot(root)
+      const normalizedRoot = normalizeSelectedRoot(root)
       if (!normalizedRoot) return
 
-      this.sessionsByWorkspaceRoot = {
-        ...this.sessionsByWorkspaceRoot,
+      this.sessionsBySelectedRoot = {
+        ...this.sessionsBySelectedRoot,
         [normalizedRoot]: sessions
       }
 
       try {
         window.localStorage.setItem(
           WORKSPACE_SESSIONS_STORAGE_KEY,
-          JSON.stringify(this.sessionsByWorkspaceRoot)
+          JSON.stringify(this.sessionsBySelectedRoot)
         )
       } catch {
         // Session summaries are refreshed from the Python runtime when available.
@@ -500,15 +533,15 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     removeCachedSession(root: string, sessionId: string): void {
-      const normalizedRoot = normalizeWorkspaceRoot(root)
+      const normalizedRoot = normalizeSelectedRoot(root)
       if (!normalizedRoot) return
 
-      const cachedSessions = this.sessionsByWorkspaceRoot[normalizedRoot] || []
-      this.sessionsByWorkspaceRoot = {
-        ...this.sessionsByWorkspaceRoot,
+      const cachedSessions = this.sessionsBySelectedRoot[normalizedRoot] || []
+      this.sessionsBySelectedRoot = {
+        ...this.sessionsBySelectedRoot,
         [normalizedRoot]: cachedSessions.filter((session) => session.session_id !== sessionId)
       }
-      if (this.workspace?.root && normalizeWorkspaceRoot(this.workspace.root) === normalizedRoot) {
+      if (this.workspace?.selected_root && normalizeSelectedRoot(this.workspace.selected_root) === normalizedRoot) {
         this.sessionHistory = this.sessionHistory.filter(
           (session) => session.session_id !== sessionId
         )
@@ -517,7 +550,7 @@ export const useRuntimeStore = defineStore('runtime', {
       try {
         window.localStorage.setItem(
           WORKSPACE_SESSIONS_STORAGE_KEY,
-          JSON.stringify(this.sessionsByWorkspaceRoot)
+          JSON.stringify(this.sessionsBySelectedRoot)
         )
       } catch {
         // The backend is the source of truth; cache cleanup is best-effort.
@@ -550,7 +583,7 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     async deleteSessionInWorkspace(path: string, sessionId: string): Promise<void> {
-      const root = normalizeWorkspaceRoot(path)
+      const root = normalizeSelectedRoot(path)
       if (!sessionId) return
 
       if (!runtimeSocket?.isOpen) {
@@ -639,8 +672,8 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     async startNewConversationInWorkspace(path: string): Promise<void> {
-      const root = normalizeWorkspaceRoot(path)
-      if (this.workspace?.root && normalizeWorkspaceRoot(this.workspace.root) === root) {
+      const root = normalizeSelectedRoot(path)
+      if (this.workspace?.selected_root && normalizeSelectedRoot(this.workspace.selected_root) === root) {
         await this.startNewConversation()
         return
       }
@@ -649,20 +682,20 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     async openConversationWorkspace(path: string): Promise<void> {
-      const root = normalizeWorkspaceRoot(path)
-      this.pendingConversationWorkspaceRoot = root
+      const root = normalizeSelectedRoot(path)
+      this.pendingConversationSelectedRoot = root
       this.rememberConversationWorkspace(root)
       await this.openWorkspace(path)
     },
 
     async resumeSessionInWorkspace(path: string, sessionId: string): Promise<void> {
-      const root = normalizeWorkspaceRoot(path)
-      if (this.workspace?.root && normalizeWorkspaceRoot(this.workspace.root) === root) {
+      const root = normalizeSelectedRoot(path)
+      if (this.workspace?.selected_root && normalizeSelectedRoot(this.workspace.selected_root) === root) {
         await this.resumeSession(sessionId)
         return
       }
 
-      this.pendingWorkspaceResume = { root, sessionId }
+      this.pendingWorkspaceResume = { selected_root: root, sessionId }
       await this.openWorkspace(path)
     },
 
@@ -673,7 +706,7 @@ export const useRuntimeStore = defineStore('runtime', {
 
       if (!runtimeSocket?.isOpen) {
         this.pendingWorkspaceResume = null
-        this.pendingConversationWorkspaceRoot = null
+        this.pendingConversationSelectedRoot = null
         this.errorMessage = '后端还没有连接，无法打开工作区。'
         return
       }
@@ -737,9 +770,9 @@ export const useRuntimeStore = defineStore('runtime', {
           this.workspace = event.workspace || null
           this.applyModelConfig(event.model_config)
           this.rememberWorkspace(this.workspace)
-          if (this.workspace?.root) {
+          if (this.workspace?.selected_root) {
             this.sessionHistory =
-              this.sessionsByWorkspaceRoot[normalizeWorkspaceRoot(this.workspace.root)] || []
+              this.sessionsBySelectedRoot[normalizeSelectedRoot(this.workspace.selected_root)] || []
           }
           chat.addSystemMessage(`已连接后端：${event.session_id}`)
           this.requestSessions()
@@ -756,16 +789,16 @@ export const useRuntimeStore = defineStore('runtime', {
           this.activePermission = null
           this.activeClarification = null
           this.sessionHistory =
-            this.sessionsByWorkspaceRoot[normalizeWorkspaceRoot(event.workspace.root)] || []
+            this.sessionsBySelectedRoot[normalizeSelectedRoot(event.workspace.selected_root)] || []
           chat.resetConversation()
           chat.addSystemMessage(`已打开工作区：${event.workspace.display_name}`)
           this.requestSessions()
           if (
-            this.pendingConversationWorkspaceRoot === normalizeWorkspaceRoot(event.workspace.root)
+            this.pendingConversationSelectedRoot === normalizeSelectedRoot(event.workspace.selected_root)
           ) {
-            this.pendingConversationWorkspaceRoot = null
+            this.pendingConversationSelectedRoot = null
           }
-          if (this.pendingWorkspaceResume?.root === normalizeWorkspaceRoot(event.workspace.root)) {
+          if (this.pendingWorkspaceResume?.selected_root === normalizeSelectedRoot(event.workspace.selected_root)) {
             const sessionId = this.pendingWorkspaceResume.sessionId
             this.pendingWorkspaceResume = null
             void this.resumeSession(sessionId)
@@ -782,9 +815,9 @@ export const useRuntimeStore = defineStore('runtime', {
           this.sessionState = event.session_state
           this.workspace = event.workspace || this.workspace
           this.rememberWorkspace(this.workspace)
-          if (this.workspace?.root) {
+          if (this.workspace?.selected_root) {
             this.sessionHistory =
-              this.sessionsByWorkspaceRoot[normalizeWorkspaceRoot(this.workspace.root)] || []
+              this.sessionsBySelectedRoot[normalizeSelectedRoot(this.workspace.selected_root)] || []
           }
           this.activeTurnId = ''
           this.activePermission = null
@@ -794,25 +827,25 @@ export const useRuntimeStore = defineStore('runtime', {
           break
         case 'sessions_list':
           if (
-            !event.workspace?.root ||
-            normalizeWorkspaceRoot(event.workspace.root) ===
-              (this.workspace?.root ? normalizeWorkspaceRoot(this.workspace.root) : '')
+            !event.workspace?.selected_root ||
+            normalizeSelectedRoot(event.workspace.selected_root) ===
+              (this.workspace?.selected_root ? normalizeSelectedRoot(this.workspace.selected_root) : '')
           ) {
             this.sessionHistory = event.sessions
           }
-          if (event.workspace?.root) {
-            this.cacheWorkspaceSessions(event.workspace.root, event.sessions)
-          } else if (this.workspace?.root) {
-            this.cacheWorkspaceSessions(this.workspace.root, event.sessions)
+          if (event.workspace?.selected_root) {
+            this.cacheWorkspaceSessions(event.workspace.selected_root, event.sessions)
+          } else if (this.workspace?.selected_root) {
+            this.cacheWorkspaceSessions(this.workspace.selected_root, event.sessions)
           }
           this.sessionsLoading = false
           break
         case 'session_deleted':
-          if (event.workspace?.root) {
-            this.cacheWorkspaceSessions(event.workspace.root, event.sessions)
+          if (event.workspace?.selected_root) {
+            this.cacheWorkspaceSessions(event.workspace.selected_root, event.sessions)
             if (
-              normalizeWorkspaceRoot(event.workspace.root) ===
-              (this.workspace?.root ? normalizeWorkspaceRoot(this.workspace.root) : '')
+              normalizeSelectedRoot(event.workspace.selected_root) ===
+              (this.workspace?.selected_root ? normalizeSelectedRoot(this.workspace.selected_root) : '')
             ) {
               this.sessionHistory = event.sessions
             }
@@ -924,7 +957,7 @@ export const useRuntimeStore = defineStore('runtime', {
           this.errorMessage = event.message
           if (event.type === 'workspace_error') {
             this.pendingWorkspaceResume = null
-            this.pendingConversationWorkspaceRoot = null
+            this.pendingConversationSelectedRoot = null
           }
           if (event.request_id?.startsWith('sessions-')) {
             this.sessionsLoading = false

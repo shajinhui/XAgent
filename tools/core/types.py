@@ -8,6 +8,7 @@ from typing import Any, Dict
 
 from sandbox.macos_executor import SecureMacOSSandboxExecutor
 from security.circuit_breaker import CircuitBreaker
+from security.permissions import ApprovalPolicy, FileSystemPolicy, NetworkPolicy, PermissionProfile
 from security.policy import SecurityPolicy
 
 
@@ -43,8 +44,14 @@ class ToolPermissionError(PermissionError):
 class ToolExecutionContext:
     """每次工具执行共享的项目根目录、安全策略和执行器。"""
 
+    selected_root: Path
     project_root: Path
+    current_dir: Path
     session_id: str
     policy: SecurityPolicy
+    filesystem_policy: FileSystemPolicy
+    network_policy: NetworkPolicy
+    permission_profile: PermissionProfile
+    approval_policy: ApprovalPolicy
     circuit_breaker: CircuitBreaker
     command_executor: SecureMacOSSandboxExecutor

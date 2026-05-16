@@ -58,7 +58,11 @@ def create_websocket_session(
     workspace: WorkspaceContext,
     system_prompt: str,
 ) -> tuple[str, SessionRuntimeState, ToolRegistry, ToolRunner, ContextManager]:
-    """创建 WebSocket 内存会话，但不立即写入磁盘。"""
+    """创建 WebSocket 内存会话，但不立即写入磁盘。
+
+    这里创建的是新 session 的基础运行件：session 状态、工具目录、工具执行器、
+    以及模型可见 history。真正的磁盘 session 记录等首条非空 user_input 再创建。
+    """
 
     if workspace.session_store is None:
         raise ValueError("workspace session store is not initialized")
@@ -66,7 +70,15 @@ def create_websocket_session(
     session_id = str(uuid.uuid4())
     session_state = SessionRuntimeState(session_id=session_id)
     registry = build_default_registry()
-    runner = ToolRunner(registry, create_tool_context(workspace.root, session_id))
+    runner = ToolRunner(
+        registry,
+        create_tool_context(
+            workspace.selected_root,
+            session_id,
+            project_root=workspace.project_root,
+            current_dir=workspace.current_dir,
+        ),
+    )
     history = ContextManager.with_system_prompt(system_prompt)
     return session_id, session_state, registry, runner, history
 

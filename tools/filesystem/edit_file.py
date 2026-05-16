@@ -42,8 +42,7 @@ def run(ctx: ToolExecutionContext, payload: dict) -> str:
     """按 1-based 行号替换文件片段；写入前做路径和范围校验。"""
 
     args = EditFileArgs(**payload)
-    path = ctx.policy.resolve_path(args.path)
-    ctx.policy.ensure_writable_path(path)
+    path = ctx.policy.resolve_write_path(args.path)
     if not path.exists() or path.is_dir():
         raise FileNotFoundError(f"文件不存在或不可编辑: {path}")
 

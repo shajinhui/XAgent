@@ -9,6 +9,27 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from security.permissions import FileSystemPolicy, NetworkPolicy
+
+
+SYSTEM_READ_PATHS = (
+    "/bin",
+    "/sbin",
+    "/usr/bin",
+    "/usr/sbin",
+    "/usr/lib",
+    "/usr/libexec",
+    "/System",
+    "/Library",
+    "/private/etc",
+)
+TEMP_PATHS = (
+    "/tmp",
+    "/private/tmp",
+    "/private/var/folders",
+)
+DEV_NULL = Path("/dev/null")
+
 
 @dataclass
 class CommandExecResult:
@@ -29,11 +50,11 @@ class SecureMacOSSandboxExecutor:
 
     def __init__(
         self,
-        project_root: Path,
+        selected_root: Path,
         timeout_seconds: int = 20,
         sandbox_exec_path: str = "/usr/bin/sandbox-exec",
     ) -> None:
-        self.project_root = project_root.resolve()
+        self.selected_root = selected_root.resolve()
         self.timeout_seconds = timeout_seconds
         self.sandbox_exec_path = sandbox_exec_path
 
@@ -43,10 +64,27 @@ class SecureMacOSSandboxExecutor:
 
         return value.replace("\\", "\\\\").replace('"', '\\"')
 
-    def _profile(self) -> str:
-        """生成限制写入范围的 Seatbelt profile。"""
+    def _profile(
+        self,
+        filesystem_policy: FileSystemPolicy,
+        network_policy: NetworkPolicy,
+    ) -> str:
+        """按当前 filesystem/network policy 生成 Seatbelt profile。"""
 
-        workspace = self._seatbelt_string(self.project_root.as_posix())
+        read_filters = self._path_filters(_readable_sandbox_paths(filesystem_policy))
+        write_filters = self._path_filters(_writable_sandbox_paths(filesystem_policy))
+        protected_read_denies = self._protected_path_denies(
+            "file-read*",
+            filesystem_policy.accessible_roots,
+            filesystem_policy.deny_read_names,
+        )
+        protected_write_denies = self._protected_path_denies(
+            "file-write*",
+            filesystem_policy.writable_roots,
+            filesystem_policy.deny_write_names,
+        )
+        network_allow = "\n(allow network*)" if network_policy == NetworkPolicy.ENABLED else ""
+
         return f"""
 (version 1)
 (deny default)
@@ -55,25 +93,49 @@ class SecureMacOSSandboxExecutor:
 (allow process*)
 (allow signal (target self))
 
-; Commands need to read tools, libraries, interpreters, and the workspace.
-(allow file-read*)
+; Commands can read system tools plus filesystem policy readable roots.
+(allow file-read*
+{read_filters})
 
-; Keep writes inside the workspace and temporary directories.
+; Keep writes inside filesystem policy writable roots and temporary directories.
 (allow file-write*
-  (subpath "{workspace}")
-  (subpath "/tmp")
-  (subpath "/private/tmp")
-  (subpath "/private/var/folders")
-  (literal "/dev/null"))
+{write_filters})
+{network_allow}
+{protected_read_denies}
+{protected_write_denies}
 
 ; Common read-only system queries used by shells and language runtimes.
 (allow sysctl-read)
 (allow mach-lookup)
 """.strip()
 
+    def _path_filters(self, paths: tuple[Path, ...]) -> str:
+        return "\n".join(
+            f'  ({_seatbelt_path_kind(path)} "{self._seatbelt_string(path.as_posix())}")'
+            for path in paths
+        )
+
+    def _protected_path_denies(
+        self,
+        operation: str,
+        roots: tuple[Path, ...],
+        names: tuple[str, ...],
+    ) -> str:
+        lines: list[str] = []
+        for root in roots:
+            for name in names:
+                protected = root / name
+                value = self._seatbelt_string(protected.as_posix())
+                lines.append(f'(deny {operation} (literal "{value}"))')
+                lines.append(f'(deny {operation} (subpath "{value}"))')
+        return "\n".join(lines)
+
     def run(
         self,
         command: str,
+        *,
+        filesystem_policy: FileSystemPolicy,
+        network_policy: NetworkPolicy,
         timeout_seconds: int | None = None,
         cwd: Path | None = None,
     ) -> CommandExecResult:
@@ -86,20 +148,26 @@ class SecureMacOSSandboxExecutor:
         if not sandbox_exec:
             return CommandExecResult(False, 127, "", "sandbox-exec 不可用，无法启用 macOS 原生沙箱")
 
-        if not self.project_root.exists() or not self.project_root.is_dir():
-            return CommandExecResult(False, 127, "", f"项目根目录无效: {self.project_root}")
+        if not self.selected_root.exists() or not self.selected_root.is_dir():
+            return CommandExecResult(False, 127, "", f"所选工作区无效: {self.selected_root}")
 
-        command_cwd = (cwd or self.project_root).resolve()
-        if self.project_root not in command_cwd.parents and command_cwd != self.project_root:
-            return CommandExecResult(False, 127, "", f"命令工作目录越界: {command_cwd}")
-        if not command_cwd.exists() or not command_cwd.is_dir():
-            return CommandExecResult(False, 127, "", f"命令工作目录无效: {command_cwd}")
+        try:
+            command_cwd = filesystem_policy.resolve_command_cwd(cwd)
+        except (PermissionError, ValueError) as exc:
+            return CommandExecResult(False, 127, "", f"命令工作目录无效: {exc}")
 
         shell_command = f"set -eu; cd {shlex.quote(command_cwd.as_posix())}; {command}"
         try:
             # 使用 /bin/sh -lc 保持与终端 shell 命令接近的行为，同时由 Seatbelt 限制写入。
             proc = subprocess.run(
-                [sandbox_exec, "-p", self._profile(), "/bin/sh", "-lc", shell_command],
+                [
+                    sandbox_exec,
+                    "-p",
+                    self._profile(filesystem_policy, network_policy),
+                    "/bin/sh",
+                    "-lc",
+                    shell_command,
+                ],
                 cwd=command_cwd,
                 capture_output=True,
                 text=True,
@@ -128,3 +196,35 @@ class SecureMacOSSandboxExecutor:
             proc.stdout,
             stderr,
         )
+
+
+def _readable_sandbox_paths(filesystem_policy: FileSystemPolicy) -> tuple[Path, ...]:
+    paths = (
+        *tuple(Path(path) for path in SYSTEM_READ_PATHS),
+        *filesystem_policy.readable_roots,
+        *tuple(Path(path) for path in TEMP_PATHS),
+        DEV_NULL,
+    )
+    return tuple(_dedupe_existing(paths))
+
+
+def _writable_sandbox_paths(filesystem_policy: FileSystemPolicy) -> tuple[Path, ...]:
+    paths = (
+        *filesystem_policy.writable_roots,
+        *tuple(Path(path) for path in TEMP_PATHS),
+        DEV_NULL,
+    )
+    return tuple(_dedupe_existing(paths))
+
+
+def _dedupe_existing(paths: tuple[Path, ...]) -> list[Path]:
+    result: list[Path] = []
+    for path in paths:
+        resolved = path.expanduser().resolve()
+        if resolved not in result and (resolved.exists() or resolved == DEV_NULL):
+            result.append(resolved)
+    return result
+
+
+def _seatbelt_path_kind(path: Path) -> str:
+    return "literal" if path == DEV_NULL or path.is_file() else "subpath"

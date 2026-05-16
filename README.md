@@ -82,7 +82,7 @@ workspace 与权限策略专题架构见：[`docs/WORKSPACE_PERMISSION_ARCHITECT
 - `MODEL_PROVIDER` / `MODEL_NAME` 是主 Agent 模型；`LOW_COST_MODEL_PROVIDER` / `LOW_COST_MODEL_NAME` 是标题生成、路由判断等简单任务使用的低成本模型，默认继承主模型。
 - 桌面端会从后端读取模型配置；`MODEL_OPTIONS` 可扩展输入栏旁边的模型下拉列表，`REASONING_EFFORT=off|low|medium|high|max` 可设置默认思考程度。DeepSeek 模型会额外按官方 thinking 参数处理：`off` 显式关闭 thinking，`low/medium` 映射为 `high`，`xhigh/max` 映射为 `max`。
 - 阶段 2 已将 `run_command` 切换到 macOS 原生沙箱执行，并增加命令白名单、风险拦截和工具元信息。
-- macOS 沙箱当前使用 `sandbox-exec`/Seatbelt：命令在真实项目目录执行，默认禁止网络，只允许写项目目录和临时目录，并受命令策略限制。
+- macOS 沙箱当前使用 `sandbox-exec`/Seatbelt：命令在真实项目目录执行，默认禁止网络，并按 `FileSystemPolicy` 生成可读/可写根目录。
 - 如果当前进程本身已经处在受限沙箱里，`sandbox-exec` 可能返回 `sandbox_apply: Operation not permitted`；正常终端/桌面应用运行环境下再做端到端验证。
 - 会话运行态会写入 `.codex-mini/sessions/`：`index.sqlite` 保存会话索引，`transcripts/*.jsonl` 保存 append-only 事件流。
 - 会话标题根据首条用户提问调用模型生成，并在返回前清理与截断。

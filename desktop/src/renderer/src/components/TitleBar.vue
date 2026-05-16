@@ -66,7 +66,7 @@ const workspaceLabel = computed(() => props.workspace?.display_name || '打开�
       <button
         class="workspace-pill"
         type="button"
-        :title="props.workspace?.root || '打开工作区'"
+        :title="props.workspace?.selected_root || '打开工作区'"
         aria-label="打开工作区"
         @click="emit('openWorkspace')"
       >

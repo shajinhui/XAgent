@@ -26,7 +26,18 @@ class ContextModuleTests(unittest.TestCase):
             model = ModelContext.from_request_config(model_config)
             user = UserContext("system", "hello")
 
-            self.assertEqual(environment.as_dict()["root"], workspace.root.as_posix())
+            self.assertEqual(
+                environment.as_dict()["selected_root"],
+                workspace.selected_root.as_posix(),
+            )
+            self.assertEqual(
+                environment.as_dict()["project_root"],
+                workspace.project_root.as_posix(),
+            )
+            self.assertEqual(
+                permissions.as_dict()["project_root"],
+                workspace.project_root.as_posix(),
+            )
             self.assertEqual(permissions.as_dict()["command_sandbox"], "macos-seatbelt")
             self.assertEqual(model.as_dict()["model"], "openai/gpt-4o-mini")
             self.assertEqual(user.render_fragment(), "hello")
@@ -46,7 +57,15 @@ class ContextModuleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = WorkspaceManager(Path(tmp)).open()
             registry = build_default_registry()
-            runner = ToolRunner(registry, create_tool_context(workspace.root, "session-1"))
+            runner = ToolRunner(
+                registry,
+                create_tool_context(
+                    workspace.selected_root,
+                    "session-1",
+                    project_root=workspace.project_root,
+                    current_dir=workspace.current_dir,
+                ),
+            )
             history = ContextManager.with_system_prompt("system")
             turn = TurnContext.from_runtime(
                 session_id="session-1",
@@ -76,8 +95,8 @@ class ContextModuleTests(unittest.TestCase):
             self.assertTrue(result.ok)
             self.assertEqual(invocation.session_id, "session-1")
             self.assertEqual(invocation.turn_id, "turn-1")
-            self.assertEqual(invocation.workspace_root, workspace.root)
-            self.assertEqual(invocation.diff_tracker.touched_paths, [(workspace.root / "created.txt").resolve().as_posix()])
+            self.assertEqual(invocation.selected_root, workspace.selected_root)
+            self.assertEqual(invocation.diff_tracker.touched_paths, [(workspace.selected_root / "created.txt").resolve().as_posix()])
 
 
 if __name__ == "__main__":

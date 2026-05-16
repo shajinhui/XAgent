@@ -15,7 +15,13 @@ from workspace import WorkspaceContext
 
 @dataclass
 class TurnContext:
-    """All runtime state needed to execute one user turn."""
+    """All runtime state needed to execute one user turn.
+
+    Keep this as the boundary object for one user_input. If a value is needed
+    by both the model loop and tool execution during the same turn, pass it
+    through TurnContext instead of adding another positional argument to
+    `run_turn()`.
+    """
 
     session_id: str
     turn_id: str

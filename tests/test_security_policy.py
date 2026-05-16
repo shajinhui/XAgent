@@ -4,8 +4,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from security import ApprovalPolicy, FileSystemPolicy, PermissionProfile
 from security.circuit_breaker import CircuitBreaker
 from security.policy import SecurityPolicy
+from workspace import AdditionalRoot
 
 
 class SecurityPolicyTests(unittest.TestCase):
@@ -15,6 +17,25 @@ class SecurityPolicyTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 policy.resolve_path("/etc/passwd")
+
+    def test_resolve_path_uses_current_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            nested = root / "pkg"
+            nested.mkdir()
+            policy = SecurityPolicy(root, current_dir=nested)
+
+            self.assertEqual(policy.resolve_path("module.py"), (nested / "module.py").resolve())
+            self.assertEqual(policy.resolve_command_cwd(None), nested.resolve())
+
+    def test_file_system_policy_exposes_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            policy = SecurityPolicy(root)
+
+            self.assertEqual(policy.permission_profile, PermissionProfile.WORKSPACE_WRITE)
+            self.assertEqual(policy.approval_policy, ApprovalPolicy.ASK_BEFORE_MUTATING)
+            self.assertIsInstance(policy.filesystem_policy, FileSystemPolicy)
 
     def test_ensure_writable_path_blocks_protected_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -26,6 +47,48 @@ class SecurityPolicyTests(unittest.TestCase):
 
             with self.assertRaises(PermissionError):
                 policy.ensure_writable_path(root / ".git" / "config")
+
+            with self.assertRaises(PermissionError):
+                policy.ensure_writable_path(root / ".codex-mini" / "sessions" / "index.sqlite")
+
+    def test_resolve_read_path_blocks_secret_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            env_path = root / ".env"
+            env_path.write_text("API_KEY=secret", encoding="utf-8")
+            policy = SecurityPolicy(root)
+
+            with self.assertRaises(PermissionError):
+                policy.resolve_read_path(".env")
+
+    def test_read_only_profile_denies_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            policy = SecurityPolicy(root, permission_profile=PermissionProfile.READ_ONLY)
+
+            self.assertEqual(policy.resolve_read_path(".").resolve(), root.resolve())
+            with self.assertRaises(PermissionError):
+                policy.resolve_write_path("created.txt")
+
+    def test_additional_read_root_does_not_expand_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace"
+            external = Path(tmp) / "external"
+            workspace.mkdir()
+            external.mkdir()
+            (external / "notes.txt").write_text("hello", encoding="utf-8")
+            filesystem_policy = FileSystemPolicy.workspace_write(
+                workspace,
+                additional_roots=[AdditionalRoot(external, "read")],
+            )
+            policy = SecurityPolicy(workspace, filesystem_policy=filesystem_policy)
+
+            self.assertEqual(
+                policy.resolve_read_path((external / "notes.txt").as_posix()),
+                (external / "notes.txt").resolve(),
+            )
+            with self.assertRaises(PermissionError):
+                policy.resolve_write_path((external / "created.txt").as_posix())
 
     def test_resolve_command_cwd_accepts_workspace_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

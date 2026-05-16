@@ -316,7 +316,12 @@ async def run_turn(
     session_store: SessionStore,
     turn_context: TurnContext,
 ) -> ContextManager:
-    """执行一次完整模型回合，直到模型给出最终回答或会话被挂起。"""
+    """执行一次完整模型回合，直到模型给出最终回答或会话被挂起。
+
+    本函数是主循环的核心：model -> optional tool calls -> tool results ->
+    model。它只接收 TurnContext，避免 registry、runner、history、session_id
+    等单轮状态在调用栈中继续散开。
+    """
 
     session_id = turn_context.session_id
     turn_id = turn_context.turn_id
@@ -349,6 +354,8 @@ async def run_turn(
 
         # 模型可能一次返回多个工具调用；当前按顺序执行，便于权限和 transcript 对齐。
         for tool_call in tool_calls:
+            # Router 只负责把模型返回格式转成内部 ToolInvocation，并把
+            # TurnContext 中的 session/turn/workspace 信息贴到本次工具调用上。
             invocation = ToolRouter.build_tool_invocation(tool_call, turn_context)
             tool_name = invocation.name
             arguments = invocation.arguments
@@ -375,6 +382,7 @@ async def run_turn(
                 )
             )
 
+            # Runner 是唯一真正执行工具的入口：JSON 解析、审批拦截、异常包装都在这里。
             result = runner.execute_invocation(invocation)
             metadata = result.metadata or {}
             if metadata.get("user_interaction_action") == "ask":
@@ -470,6 +478,7 @@ async def run_turn(
             )
 
             content = result.content if result.ok else f"[ERROR] {result.content}"
+            # 工具结果必须作为 role=tool 回灌给模型，否则模型看不到刚才的执行结果。
             history.append_tool_result(request_id, tool_name, content)
             if session_state.suspended:
                 return history

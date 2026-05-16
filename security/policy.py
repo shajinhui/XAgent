@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from security.permissions import ApprovalPolicy, FileSystemPolicy, PermissionProfile
+
 
 DANGEROUS_PATTERNS = [
     r"rm\s+-rf\s+/",
@@ -58,6 +60,7 @@ PROTECTED_WRITE_PREFIXES = {
 PROTECTED_COMMAND_PATTERNS = [
     r"(^|\s)(\.env)(\s|$|[;&|<>])",
     r"(^|\s)(\.git)(/|\s|$|[;&|<>])",
+    r"(^|\s)(\.codex-mini)(/|\s|$|[;&|<>])",
 ]
 
 
@@ -81,56 +84,51 @@ class CommandDecision:
 class SecurityPolicy:
     """单个 workspace 的文件路径和命令安全策略。"""
 
-    def __init__(self, project_root: Path) -> None:
-        self.project_root = project_root.resolve()
+    def __init__(
+        self,
+        selected_root: Path,
+        *,
+        project_root: Path | None = None,
+        current_dir: Path | None = None,
+        filesystem_policy: FileSystemPolicy | None = None,
+        permission_profile: PermissionProfile = PermissionProfile.WORKSPACE_WRITE,
+        approval_policy: ApprovalPolicy = ApprovalPolicy.ASK_BEFORE_MUTATING,
+    ) -> None:
+        self.selected_root = selected_root.resolve()
+        self.project_root = (project_root or self.selected_root).resolve()
+        self.current_dir = (current_dir or self.selected_root).resolve()
+        self.permission_profile = permission_profile
+        self.approval_policy = approval_policy
+        self.filesystem_policy = filesystem_policy or _default_filesystem_policy(
+            self.selected_root,
+            self.current_dir,
+            permission_profile,
+        )
 
     def resolve_path(self, raw_path: str) -> Path:
-        """解析路径，并确保结果仍在 workspace 内。"""
+        """解析路径，并确保结果仍在 workspace policy 已知根目录内。"""
 
-        candidate = Path(raw_path)
-        if not candidate.is_absolute():
-            candidate = self.project_root / candidate
-        resolved = candidate.resolve()
-        if self.project_root not in resolved.parents and resolved != self.project_root:
-            raise ValueError(f"路径越界，禁止访问: {resolved}")
-        return resolved
+        return self.filesystem_policy.resolve_path(raw_path)
+
+    def resolve_read_path(self, raw_path: str) -> Path:
+        """解析并确认目标路径可读。"""
+
+        return self.filesystem_policy.resolve_read_path(raw_path)
+
+    def resolve_write_path(self, raw_path: str) -> Path:
+        """解析并确认目标路径可写。"""
+
+        return self.filesystem_policy.resolve_write_path(raw_path)
 
     def resolve_command_cwd(self, raw_cwd: str | None = None) -> Path:
         """解析命令 cwd；cwd 只能是 workspace 内的普通目录。"""
 
-        if raw_cwd is None or not raw_cwd.strip():
-            return self.project_root
-
-        resolved = self.resolve_path(raw_cwd)
-        if not resolved.exists():
-            raise ValueError(f"命令工作目录不存在: {resolved}")
-        if not resolved.is_dir():
-            raise ValueError(f"命令工作目录必须是目录: {resolved}")
-
-        try:
-            relative = resolved.relative_to(self.project_root)
-        except ValueError as exc:
-            raise ValueError(f"命令工作目录越界: {resolved}") from exc
-
-        first_part = relative.parts[0] if relative.parts else ""
-        if first_part in PROTECTED_WRITE_PREFIXES:
-            raise PermissionError(f"命令工作目录指向受保护路径: {relative.as_posix()}")
-
-        return resolved
+        return self.filesystem_policy.resolve_command_cwd(raw_cwd)
 
     def ensure_writable_path(self, path: Path) -> None:
         """确认目标路径允许写入。"""
 
-        resolved = path.resolve()
-        try:
-            relative = resolved.relative_to(self.project_root)
-        except ValueError as exc:
-            raise PermissionError(f"路径越界，禁止写入: {resolved}") from exc
-
-        relative_text = relative.as_posix()
-        first_part = relative.parts[0] if relative.parts else ""
-        if relative_text in PROTECTED_WRITE_PATHS or first_part in PROTECTED_WRITE_PREFIXES:
-            raise PermissionError(f"受保护路径，禁止写入: {relative_text}")
+        self.filesystem_policy.ensure_writable_path(path)
 
     def check_command(self, command: str, approved: bool = False) -> CommandDecision:
         """判断命令是允许、拒绝，还是需要用户确认。"""
@@ -176,3 +174,13 @@ class SecurityPolicy:
             )
 
         return CommandDecision(action="allow", category="allowed")
+
+
+def _default_filesystem_policy(
+    selected_root: Path,
+    current_dir: Path,
+    permission_profile: PermissionProfile,
+) -> FileSystemPolicy:
+    if permission_profile == PermissionProfile.READ_ONLY:
+        return FileSystemPolicy.read_only(selected_root, current_dir=current_dir)
+    return FileSystemPolicy.workspace_write(selected_root, current_dir=current_dir)

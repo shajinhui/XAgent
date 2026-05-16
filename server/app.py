@@ -225,6 +225,8 @@ if app is not None:
                 context.history.clear_historical_reasoning_content()
                 context.history.append_user_message(user_text)
                 turn_id = str(uuid.uuid4())
+                # TurnContext 是“一轮用户输入”的运行态快照；它把连接级状态、
+                # 模型配置、workspace、history 和工具运行器收束成一个参数传给 run_turn。
                 turn_context = TurnContext.from_runtime(
                     session_id=context.session_id,
                     turn_id=turn_id,
@@ -268,6 +270,8 @@ if app is not None:
                 )
 
                 try:
+                    # run_turn 会持续执行 model -> tools -> model 循环，直到模型给出
+                    # 没有 tool_calls 的 assistant 消息，或安全策略挂起当前 session。
                     context.history = await run_turn(
                         ws,
                         context.session_store,

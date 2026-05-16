@@ -1,4 +1,9 @@
-"""Model context history management."""
+"""
+模型上下文历史管理模块（中文注释）。
+
+聚合并导出与模型上下文历史管理相关的公共 API，包括 `ContextManager`、
+更新辅助函数与截断工具等。
+"""
 
 from context_manager.history import ContextManager
 from context_manager.history import clear_historical_reasoning_content

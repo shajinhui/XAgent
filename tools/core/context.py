@@ -39,14 +39,19 @@ class TurnDiffTracker:
 
 @dataclass
 class ToolInvocation:
-    """Internal representation of one model-requested tool call."""
+    """Internal representation of one model-requested tool call.
+
+    This is deliberately richer than the raw model `tool_call`: it carries the
+    session/turn/workspace identity needed for auditing, approvals, future
+    cancellation, and per-turn diff tracking.
+    """
 
     name: str
     arguments: str
     call_id: str
     session_id: str | None = None
     turn_id: str | None = None
-    workspace_root: Path | None = None
+    selected_root: Path | None = None
     current_dir: Path | None = None
     source: str = "model"
     approval: ToolApprovalState = field(default_factory=ToolApprovalState)
@@ -61,6 +66,8 @@ class ToolInvocation:
         call_id: str,
         turn_context: Any | None = None,
     ) -> "ToolInvocation":
+        """Attach turn-scoped runtime identity to a raw model tool call."""
+
         invocation = cls(name=name, arguments=arguments, call_id=call_id)
         if turn_context is None:
             return invocation
@@ -71,7 +78,7 @@ class ToolInvocation:
             call_id=call_id,
             session_id=getattr(turn_context, "session_id", None),
             turn_id=getattr(turn_context, "turn_id", None),
-            workspace_root=getattr(turn_context.environment, "root", None),
+            selected_root=getattr(turn_context.environment, "selected_root", None),
             current_dir=getattr(turn_context.environment, "current_dir", None),
             diff_tracker=getattr(turn_context, "diff_tracker", TurnDiffTracker()),
         )
@@ -81,6 +88,8 @@ class ToolInvocation:
         approved: bool,
         feedback: str | None = None,
     ) -> "ToolInvocation":
+        """Return a copy used for the second execution after user approval."""
+
         return replace(
             self,
             approval=ToolApprovalState(approved=approved, feedback=feedback),

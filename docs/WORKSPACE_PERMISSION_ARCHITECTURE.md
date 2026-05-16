@@ -46,21 +46,50 @@ Codex-mini 的 workspace 与权限系统要满足这些目标：
 当前实现已经有第一版能力：
 
 - `workspace/` 可以验证并打开用户选择的目录。
-- `open_workspace` 会创建新 session，并把 `SessionStore` 与 `ToolRegistry` 绑定到新 root。
+- `WorkspaceContext` 已拆出 `selected_root`、`project_root`、`current_dir`、session-only trust、workspace snapshot 和 additional root model。
+- `open_workspace` 会创建新 session；当前 `SessionStore` 绑定到 `workspace.project_root`，工具执行边界使用 `workspace.selected_root`。
 - `run_command.cwd` 可以在 active workspace 内部子目录执行。
+- `FileSystemPolicy`、`PermissionProfile`、`ApprovalPolicy` 和 `NetworkPolicy` 已有第一版。
+- read/write/edit/grep/run_command cwd 已统一走 `current_dir + filesystem policy`。
+- `.env` 默认禁止 read/write，`.codex-mini` 默认禁止 write。
 - `write_file`、`edit_file`、`run_command` 会先走 WebSocket permission request。
 - `run_command` 批准后进入 macOS Seatbelt。
+- `sandbox/macos_executor.py` 已按 `FileSystemPolicy` 和 `NetworkPolicy` 生成第一版 Seatbelt profile。
 
 仍需要收口的差距：
 
-- `WorkspaceContext` 还把 workspace root、project identity、current dir 混在一起。
-- `allowed_roots` 只是字段，没有真实权限语义。
-- filesystem policy 还没有统一模型。
-- Seatbelt 当前允许 `file-read*`，读权限比目标模型宽。
+- `current_dir` 还没有 `change_directory` 协议，当前默认等于 selected root。
+- `AdditionalRoot` 已能进入 `FileSystemPolicy` 和 Seatbelt profile，但没有 desktop/UI 协议入口。
+- richer exec policy 还没有独立模型。
 - 命令策略是硬编码白名单和危险正则，没有 rule 文件、prefix rule 或 session allowlist。
 - CLI 路径没有完整 approve/deny/retry 闭环。
 - session resume 没有完整恢复 workspace policy、permission mode、additional dirs 和 current dir。
 - `AGENTS.md` 还没有按 project root 到 cwd 的分层加载。
+
+## 当前落地状态
+
+截至当前架构，Codex-mini 已经完成运行时模块化，并落地了 `WorkspaceContext v2` 的第一片；workspace/permission v2 还没有完整实现。
+
+已和新架构对齐的部分：
+
+- WebSocket transport 已降为薄入口，`server/runtime/` 负责 turn runner、model streaming、session state 和 WebSocket runtime context。
+- `server/processors/` 已承载 `open_workspace`、session 操作和标题生成等控制请求。
+- `tools/core/` 已承载工具协议、registry、router、runner、catalog 和工具 metadata。
+- `workspace/`、`security/`、`sandbox/` 已分成独立目录，可以承接后续 workspace/permission v2。
+- `WorkspaceContext` 已拆出 `selected_root`、`project_root`、`current_dir`、`WorkspaceTrust`、`WorkspaceSnapshot` 和 `AdditionalRoot`。
+- workspace payload 只发 `selected_root`、`project_root`、`current_dir`、`trust`、`additional_roots` 等 v2 字段；旧 `root` 与 `allowed_roots` 不再进入协议和前端类型。
+- `security/permissions.py` 已提供 `FileSystemPolicy`、`PermissionProfile`、`ApprovalPolicy` 和 `NetworkPolicy`。
+- 工具读写和命令 cwd 已通过 `SecurityPolicy` 统一使用 filesystem policy。
+- macOS Seatbelt profile 已从 filesystem/network policy 生成，不再使用固定全局读模板。
+
+尚未落地到代码的部分：
+
+- 没有 richer `ExecPolicy` rule 文件、prefix/session allowlist 或 dangerous suggestion denylist。
+- `AdditionalRoot` 还没有进入 desktop protocol。
+- `WorkspaceTrust` 目前只有 session-only 默认值，还没有持久信任或 project-local config gate。
+- `current_dir` 还不能通过协议变化，也没有 resume 重新验证。
+
+下一阶段落地时，应把本文档当作目标架构，把 `docs/PROJECT_ARCHITECTURE_STATUS.md` 当作当前代码事实。两者不一致时，优先以代码事实为准，再同步更新文档。
 
 ## 总体架构
 
@@ -259,7 +288,6 @@ class FileSystemPolicy:
 
 内置 special paths：
 
-- `:root`
 - `:project_root`
 - `:selected_root`
 - `:current_dir`
@@ -268,14 +296,13 @@ class FileSystemPolicy:
 默认 `workspace_write` 策略：
 
 ```text
-:root = read
-:project_root = write
+:selected_root = write
 :tmpdir = write
-project_root/.git = read
-project_root/.codex-mini = read
-project_root/.env = none
-project_root/.venv = read
-project_root/__pycache__ = none
+selected_root/.git = read
+selected_root/.codex-mini = read
+selected_root/.env = none
+selected_root/.venv = read
+selected_root/__pycache__ = none
 ```
 
 注意：
@@ -432,7 +459,7 @@ tool call
 
 ## Sandbox 生成
 
-当前 `sandbox/macos_executor.py` 固定允许 `file-read*`。目标是改成 policy-driven。
+当前 `sandbox/macos_executor.py` 已改为 policy-driven。第一版实现会读取必要系统目录、临时目录和 `FileSystemPolicy.readable_roots`，并只写入 `FileSystemPolicy.writable_roots`、临时目录和 `/dev/null`。
 
 目标接口：
 
@@ -452,7 +479,7 @@ class SecureMacOSSandboxExecutor:
 
 Seatbelt profile 生成规则：
 
-- `file-read*` 只允许 readable roots。
+- `file-read*` 只允许必要系统目录、临时目录和 readable roots。
 - `file-write*` 只允许 writable roots。
 - protected metadata 用 deny 或 require-not carveout。
 - deny read glob 转成 read deny。
@@ -605,8 +632,11 @@ project-local config denylist：
 - `workspace/models.py`
 - `workspace/manager.py`
 - `workspace/validator.py`
-- `server/app.py`
+- `server/runtime/websocket_context.py`
+- `server/processors/request_dispatcher.py`
+- `server/protocol/events.py`
 - `tests/test_workspace.py`
+- `tests/test_server_websocket.py`
 
 交付：
 
@@ -615,6 +645,7 @@ project-local config denylist：
 - session metadata 写入 workspace snapshot。
 - current_dir 默认 selected root。
 - git root 推导独立于 selected root。
+- 前端类型一次性迁移到 v2 payload，不保留旧 `root` / `allowed_roots` 兼容路径。
 
 验收：
 
@@ -622,12 +653,19 @@ project-local config denylist：
 - 打开非 git 目录时，project_root 等于 selected_root。
 - resume metadata 能看到 workspace snapshot。
 
+状态：
+
+- 已完成第一版实现和单元测试覆盖。
+- 后续 resume 重新验证会在 PR6 继续补齐。
+
 ### PR2: Unified Security Context
 
 修改范围：
 
 - `security/policy.py`
 - `security/permissions.py`
+- `tools/core/context.py`
+- `tools/core/types.py`
 - `tools/filesystem/read_file.py`
 - `tools/filesystem/write_file.py`
 - `tools/filesystem/edit_file.py`
@@ -639,6 +677,7 @@ project-local config denylist：
 交付：
 
 - 新增 `FileSystemPolicy`、`PermissionProfile`、`ApprovalPolicy`。
+- 新增 `NetworkPolicy`，先供 Seatbelt profile 生成使用。
 - 所有 path resolver 统一使用 current_dir + workspace policy。
 - `.codex-mini` 加入 protected metadata。
 - `.env` 默认 deny read/write。
@@ -651,12 +690,19 @@ project-local config denylist：
 - 写 `.git`、`.codex-mini`、`.venv` 被拒。
 - `run_command.cwd` 不扩大权限。
 
+状态：
+
+- 已完成第一版实现和单元测试覆盖。
+- additional roots 还没有 desktop/UI 协议入口。
+- Seatbelt profile 已从 filesystem/network policy 生成，后续继续补更细的 glob/special path 规则。
+
 ### PR3: Policy-driven Seatbelt
 
 修改范围：
 
 - `sandbox/macos_executor.py`
 - `tools/shell/run_command.py`
+- `security/permissions.py`
 - `tests/test_macos_executor.py`
 
 交付：
@@ -671,6 +717,11 @@ project-local config denylist：
 - sandbox profile 中 read roots 和 write roots 可断言。
 - 命令可读 workspace，但不能读未授权目录。
 - 命令可写 workspace，但不能写 protected metadata。
+
+状态：
+
+- 已完成第一版实现和单元测试覆盖。
+- 当前仍是 roots + protected name 级别；复杂 glob、special path 展开和真实端到端 sandbox 隔离测试留到后续收口。
 
 ### PR4: Exec Policy Rules
 
