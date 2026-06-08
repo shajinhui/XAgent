@@ -3,7 +3,7 @@ VENV_DIR ?= .venv
 PIP := $(VENV_DIR)/bin/pip
 PY := $(VENV_DIR)/bin/python
 
-.PHONY: init install run run-server sandbox clean
+.PHONY: init install run run-server sandbox clean clean-sessions
 
 init:
 	$(PYTHON) -m venv $(VENV_DIR)
@@ -24,3 +24,6 @@ sandbox:
 
 clean:
 	rm -rf __pycache__ tools/__pycache__ sandbox/__pycache__
+
+clean-sessions:
+	rm -rf .codex-mini/sessions

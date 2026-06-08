@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Literal, cast
 
 from context_manager import ContextManager
 from session import SessionStore, recover_session_messages
@@ -17,7 +17,9 @@ from server.views.session_summary import session_display_messages, summarize_ses
 from tools.core.catalog import build_default_registry
 from tools.core.registry import ToolRegistry
 from tools.core.runner import ToolRunner, create_tool_context
-from workspace import WorkspaceContext, WorkspaceManager
+from workspace import WorkspaceContext, WorkspaceManager, WorkspaceValidationError
+from workspace.instructions import render_system_prompt_with_project_instructions
+from workspace.project_config import default_project_policy
 
 
 @dataclass
@@ -97,21 +99,84 @@ class WebSocketRuntimeContext:
         self.session_persisted = False
         return previous_workspace, previous_state
 
-    def resume_session_from_disk(self, session_id: str) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    def change_directory(self, path: str) -> Dict[str, Any]:
+        """更新当前执行目录，并刷新工具上下文中的 filesystem policy。"""
+
+        previous_workspace = self.workspace.as_dict()
+        self.workspace.change_current_dir(path)
+        self.refresh_tool_runner()
+        self.refresh_history_system_prompt()
+        return previous_workspace
+
+    def add_workspace_directory(self, path: str, access: str) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        """显式加入额外目录，并刷新工具可见的读写根。"""
+
+        previous_workspace = self.workspace.as_dict()
+        root = self.workspace.add_additional_root(path, cast(Literal["read", "write"], access))
+        self.refresh_tool_runner()
+        self.refresh_history_system_prompt()
+        return previous_workspace, root.as_dict()
+
+    def current_system_prompt(self) -> str:
+        """按当前 workspace 生成模型可见 system prompt。"""
+
+        rendered, _instructions = render_system_prompt_with_project_instructions(
+            self.system_prompt,
+            self.workspace,
+        )
+        return rendered
+
+    def refresh_history_system_prompt(self) -> str:
+        """刷新历史中的 system prompt，避免 cwd/instructions 变化后上下文过期。"""
+
+        rendered = self.current_system_prompt()
+        self.history.replace_system_prompt(rendered)
+        return rendered
+
+    def refresh_tool_runner(self) -> None:
+        """按最新 workspace policy 重建 ToolRunner，同时保留会话级权限状态。"""
+
+        previous_ctx = self.runner.ctx
+        project_policy = self.workspace.project_policy or default_project_policy()
+        self.runner = ToolRunner(
+            self.registry,
+            create_tool_context(
+                self.workspace.selected_root,
+                self.session_id,
+                project_root=self.workspace.project_root,
+                current_dir=self.workspace.current_dir,
+                additional_roots=self.workspace.additional_roots,
+                exec_policy=previous_ctx.policy.exec_policy,
+                network_policy=project_policy.network_policy,
+                permission_profile=project_policy.permission_profile,
+                approval_policy=project_policy.approval_policy,
+                circuit_breaker=previous_ctx.circuit_breaker,
+            ),
+        )
+
+    def resume_session_from_disk(
+        self,
+        session_id: str,
+    ) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """从 transcript 恢复模型上下文，并返回前端可展示的消息和摘要。"""
 
+        target_record = self.session_store.get_session(session_id)
+        target_events = self.session_store.load_events(session_id)
+        self.workspace = self.workspace_manager.restore_from_snapshot(
+            _workspace_snapshot_from_session(target_record.metadata or {}, target_events)
+        )
+        self.session_store = _require_session_store(self.workspace)
         self.history = ContextManager.from_messages(
             recover_session_messages(
                 self.session_store,
                 session_id,
-                self.system_prompt,
+                self.current_system_prompt(),
             )
         )
-        target_record = self.session_store.get_session(session_id)
-        target_events = self.session_store.load_events(session_id)
         self.session_id = session_id
         self.session_state = SessionRuntimeState(session_id=session_id)
         self.registry = build_default_registry()
+        project_policy = self.workspace.project_policy or default_project_policy()
         self.runner = ToolRunner(
             self.registry,
             create_tool_context(
@@ -119,6 +184,11 @@ class WebSocketRuntimeContext:
                 session_id,
                 project_root=self.workspace.project_root,
                 current_dir=self.workspace.current_dir,
+                additional_roots=self.workspace.additional_roots,
+                exec_policy=project_policy.exec_policy,
+                network_policy=project_policy.network_policy,
+                permission_profile=project_policy.permission_profile,
+                approval_policy=project_policy.approval_policy,
             ),
         )
         self.session_persisted = True
@@ -134,3 +204,23 @@ def _require_session_store(workspace: WorkspaceContext) -> SessionStore:
     if workspace.session_store is None:
         raise RuntimeError("workspace session store is not initialized")
     return workspace.session_store
+
+
+def _workspace_snapshot_from_session(
+    metadata: Dict[str, Any],
+    events: list[Any],
+) -> Dict[str, Any]:
+    """取当前 schema 的 workspace 快照，旧字段不再做兼容读取。"""
+
+    snapshot = metadata.get("workspace")
+    if not isinstance(snapshot, dict):
+        raise WorkspaceValidationError("session metadata missing workspace snapshot")
+
+    for event in events:
+        if event.type != "workspace_policy_changed":
+            continue
+        event_workspace = event.payload.get("workspace")
+        if not isinstance(event_workspace, dict):
+            raise WorkspaceValidationError("workspace_policy_changed missing workspace snapshot")
+        snapshot = event_workspace
+    return snapshot

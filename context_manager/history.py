@@ -39,6 +39,14 @@ class ContextManager:
         """用新消息序列替换当前历史（会复制每条消息以避免外部引用）。"""
         self._messages = [dict(message) for message in messages]
 
+    def replace_system_prompt(self, system_prompt: str) -> None:
+        """更新首条 system 消息；没有 system 消息时插入到历史开头。"""
+
+        if self._messages and self._messages[0].get("role") == "system":
+            self._messages[0] = {"role": "system", "content": system_prompt}
+            return
+        self._messages.insert(0, {"role": "system", "content": system_prompt})
+
     def append_user_message(self, content: str) -> None:
         """追加一条用户消息。"""
         self._messages.append({"role": "user", "content": content})

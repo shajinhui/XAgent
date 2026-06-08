@@ -21,6 +21,7 @@ from server.runtime.model_config import (
     build_model_config_payload,
     build_model_name,
     build_model_request_config,
+    configure_litellm_environment,
     normalize_reasoning_effort,
 )
 from server.runtime.session_state import persist_websocket_session
@@ -69,6 +70,7 @@ def build_graph(registry: ToolRegistry, runner: ToolRunner):
     """
 
     def call_model(state: AgentState) -> AgentState:
+        configure_litellm_environment()
         from litellm import completion
 
         response: Any = completion(
@@ -82,6 +84,9 @@ def build_graph(registry: ToolRegistry, runner: ToolRunner):
         )
         message = response.choices[0].message.model_dump(exclude_none=True)
         return {"messages": state["messages"] + [message]}
+
+    # 说明：本函数构建的 LangGraph 仅用于 CLI/测试路径，生产环境的
+    # WebSocket runtime 使用 run_turn 作为核心回合执行器，二者职责有所区分。
 
     def should_continue(state: AgentState) -> str:
         last = state["messages"][-1]
@@ -132,6 +137,7 @@ if app is not None:
 
         await ws.accept()
         load_dotenv()
+        configure_litellm_environment()
 
         system_prompt = build_system_prompt()
         context = WebSocketRuntimeContext.create(
@@ -139,6 +145,9 @@ if app is not None:
             system_prompt,
         )
         dispatcher = WebSocketRequestDispatcher(ws, context)
+
+        # dispatcher 负责处理控制类事件（open_workspace/new_session/list_sessions 等），
+        # 而模型的对话回合（model -> tool -> model 循环）由 runtime.turn_runner.run_turn 执行。
 
         await ws.send_json(
             {
@@ -152,6 +161,9 @@ if app is not None:
                 "model_config": build_model_config_payload(),
             }
         )
+
+        # ready 事件将初始会话、工具元数据与工作区信息告知前端，前端据此渲染 UI 并
+        # 决定何时向该 WebSocket 发送用户输入或控制事件。
 
         try:
             while True:
@@ -222,6 +234,7 @@ if app is not None:
                     context.session_persisted = True
                 # 普通 assistant 推理内容不参与下一轮上下文；带 tool_calls 的 reasoning
                 # 仍保留在内存中以兼容 DeepSeek 的工具调用后的上下文拼接要求。
+                turn_system_prompt = context.refresh_history_system_prompt()
                 context.history.clear_historical_reasoning_content()
                 context.history.append_user_message(user_text)
                 turn_id = str(uuid.uuid4())
@@ -235,7 +248,7 @@ if app is not None:
                     registry=context.registry,
                     runner=context.runner,
                     history=context.history,
-                    system_prompt=context.system_prompt,
+                    system_prompt=turn_system_prompt,
                     user_input=user_text,
                     model_config=model_config,
                 )

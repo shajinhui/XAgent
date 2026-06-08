@@ -6,6 +6,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from security import ApprovalPolicy
+from security.exec_policy import CommandDecision
 from tools.core.types import ToolExecutionContext, ToolMeta, ToolPermissionError
 
 
@@ -25,7 +27,7 @@ class RunCommandArgs(BaseModel):
     timeout: int = Field(20, ge=1, le=120, description="超时时间（秒）")
     cwd: str | None = Field(
         None,
-        description="可选命令工作目录，必须位于当前 workspace 内部；默认使用 workspace 根目录",
+        description="可选命令工作目录，必须位于当前 filesystem policy 的可写目录；默认使用 current_dir",
     )
 
 
@@ -68,13 +70,7 @@ def run(ctx: ToolExecutionContext, payload: dict) -> str:
         # 非白名单命令先返回 ask，让 WebSocket 层弹出审批，而不是直接执行。
         raise ToolPermissionError(
             f"命令需要用户确认: {decision.reason}",
-            metadata={
-                "error_type": "permission_required",
-                "permission_action": "ask",
-                "category": decision.category,
-                "command": args.command,
-                "cwd": _display_cwd(ctx, command_cwd),
-            },
+            metadata=_command_metadata(ctx, args.command, command_cwd, decision, "permission_required", "ask"),
         )
 
     if not decision.allowed:
@@ -82,30 +78,43 @@ def run(ctx: ToolExecutionContext, payload: dict) -> str:
         suspended = ctx.circuit_breaker.record_rejection(ctx.session_id, decision.category)
         count = ctx.circuit_breaker.count(ctx.session_id, decision.category)
         message = f"命令被拒绝: {decision.reason} (连续拒绝 {count}/3)"
-        metadata = {
-            "error_type": "permission_denied",
-            "permission_action": "deny",
-            "category": decision.category,
-            "rejection_count": count,
-            "session_suspended": suspended,
-            "command": args.command,
-            "cwd": _display_cwd(ctx, command_cwd),
-        }
+        metadata = _command_metadata(ctx, args.command, command_cwd, decision, "permission_denied", "deny")
+        metadata.update(
+            {
+                "rejection_count": count,
+                "session_suspended": suspended,
+            }
+        )
         if suspended:
             message += "\n会话已自动挂起，请用户确认后恢复。"
         raise ToolPermissionError(message, metadata=metadata)
 
-    if not approved:
+    if not approved and decision.approval_required:
         # 即便是白名单命令，run_command 本身仍是 mutating/高风险入口，需要用户确认。
+        if ctx.approval_policy == ApprovalPolicy.NEVER:
+            raise ToolPermissionError(
+                f"命令被拒绝: 当前 approval policy 禁止请求用户批准: {args.command}",
+                metadata=_command_metadata(
+                    ctx,
+                    args.command,
+                    command_cwd,
+                    decision,
+                    "permission_denied",
+                    "deny",
+                    category="approval_unavailable",
+                ),
+            )
         raise ToolPermissionError(
             f"命令需要用户确认: {args.command}",
-            metadata={
-                "error_type": "permission_required",
-                "permission_action": "ask",
-                "category": "command_approval",
-                "command": args.command,
-                "cwd": _display_cwd(ctx, command_cwd),
-            },
+            metadata=_command_metadata(
+                ctx,
+                args.command,
+                command_cwd,
+                decision,
+                "permission_required",
+                "ask",
+                category="command_approval",
+            ),
         )
 
     result = ctx.command_executor.run(
@@ -136,3 +145,27 @@ def _display_cwd(ctx: ToolExecutionContext, cwd: Path) -> str:
     if relative.as_posix() == ".":
         return "."
     return relative.as_posix()
+
+
+def _command_metadata(
+    ctx: ToolExecutionContext,
+    command: str,
+    cwd: Path,
+    decision: CommandDecision,
+    error_type: str,
+    permission_action: str,
+    *,
+    category: str | None = None,
+) -> dict:
+    metadata = {
+        "error_type": error_type,
+        "permission_action": permission_action,
+        "category": category or decision.category,
+        "command": command,
+        "cwd": _display_cwd(ctx, cwd),
+    }
+    if decision.suggested_prefix_rule:
+        metadata["suggested_prefix_rule"] = list(decision.suggested_prefix_rule)
+    if decision.matched_prefix_rule:
+        metadata["matched_prefix_rule"] = list(decision.matched_prefix_rule)
+    return metadata

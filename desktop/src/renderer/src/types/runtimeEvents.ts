@@ -69,10 +69,38 @@ export type RuntimeSessionSummary = {
   last_message: string
 }
 
+export type RuntimeActivityStepStatus = 'running' | 'waiting' | 'success' | 'error'
+
+export type RuntimeActivityStepKind =
+  | 'thinking'
+  | 'search'
+  | 'read'
+  | 'edit'
+  | 'command'
+  | 'permission'
+  | 'question'
+  | 'web'
+  | 'tool'
+  | 'error'
+
+export type RuntimeActivityStep = {
+  label: string
+  status: RuntimeActivityStepStatus
+  kind: RuntimeActivityStepKind
+  detail?: string
+  requestId?: string
+}
+
 export type RuntimeDisplayMessage = {
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'activity' | 'activity_event'
   content: string
   timestamp?: number
+  collapsed?: boolean
+  startedAt?: number
+  finishedAt?: number
+  activity_key?: string
+  step?: RuntimeActivityStep
+  isFinal?: boolean
 }
 
 export type ClarificationOption = {
@@ -138,6 +166,17 @@ export type WorkspaceChangedEvent = RuntimeEventBase & {
   tools: RuntimeToolMetadataMap
 }
 
+export type WorkspacePolicyChangedEvent = RuntimeEventBase & {
+  type: 'workspace_policy_changed'
+  session_id: string
+  previous_workspace: RuntimeWorkspace
+  workspace: RuntimeWorkspace
+  session_state: RuntimeSessionState
+  reason: 'change_directory' | 'add_dir' | string
+  current_dir?: string
+  added_root?: RuntimeAdditionalRoot
+}
+
 export type AssistantTokenEvent = RuntimeEventBase & {
   type: 'assistant_token'
   token: string
@@ -194,6 +233,7 @@ export type SessionStateEvent = RuntimeEventBase & {
   message_count?: number
   messages?: RuntimeDisplayMessage[]
   session?: RuntimeSessionSummary | null
+  workspace?: RuntimeWorkspace
 }
 
 export type FinalAnswerEvent = RuntimeEventBase & {
@@ -208,6 +248,7 @@ export type RuntimeErrorEvent = RuntimeEventBase & {
   received_type?: string
   received_request_id?: string
   requested_workspace?: string
+  requested_path?: string
   workspace?: RuntimeWorkspace
 }
 
@@ -237,6 +278,7 @@ export type RuntimeEvent =
   | TurnStartedEvent
   | SessionCreatedEvent
   | WorkspaceChangedEvent
+  | WorkspacePolicyChangedEvent
   | AssistantTokenEvent
   | ToolCallStartedEvent
   | ToolCallResultEvent
@@ -264,6 +306,8 @@ export type RuntimeClientPacket =
       request_id?: string
       approved: boolean
       feedback?: string
+      scope?: 'once' | 'session'
+      prefix_rule?: string[]
     }
   | ({
       type: 'clarification_response'
@@ -295,6 +339,19 @@ export type RuntimeClientPacket =
   | {
       type: 'open_workspace'
       path: string
+      request_id?: string
+      turn_id?: string
+    }
+  | {
+      type: 'change_directory'
+      path: string
+      request_id?: string
+      turn_id?: string
+    }
+  | {
+      type: 'add_dir'
+      path: string
+      access: 'read' | 'write'
       request_id?: string
       turn_id?: string
     }

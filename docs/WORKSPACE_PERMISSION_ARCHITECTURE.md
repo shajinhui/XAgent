@@ -48,7 +48,9 @@ Codex-mini 的 workspace 与权限系统要满足这些目标：
 - `workspace/` 可以验证并打开用户选择的目录。
 - `WorkspaceContext` 已拆出 `selected_root`、`project_root`、`current_dir`、session-only trust、workspace snapshot 和 additional root model。
 - `open_workspace` 会创建新 session；当前 `SessionStore` 绑定到 `workspace.project_root`，工具执行边界使用 `workspace.selected_root`。
-- `run_command.cwd` 可以在 active workspace 内部子目录执行。
+- `change_directory` 可以在已授权目录内切换 `current_dir`，且不会创建新 session。
+- `add_dir` 可以显式加入 read/write additional root，并立即刷新工具执行的 filesystem policy。
+- `run_command.cwd` 可以在 active filesystem policy 的可写目录中执行。
 - `FileSystemPolicy`、`PermissionProfile`、`ApprovalPolicy` 和 `NetworkPolicy` 已有第一版。
 - read/write/edit/grep/run_command cwd 已统一走 `current_dir + filesystem policy`。
 - `.env` 默认禁止 read/write，`.codex-mini` 默认禁止 write。
@@ -58,13 +60,12 @@ Codex-mini 的 workspace 与权限系统要满足这些目标：
 
 仍需要收口的差距：
 
-- `current_dir` 还没有 `change_directory` 协议，当前默认等于 selected root。
-- `AdditionalRoot` 已能进入 `FileSystemPolicy` 和 Seatbelt profile，但没有 desktop/UI 协议入口。
-- richer exec policy 还没有独立模型。
-- 命令策略是硬编码白名单和危险正则，没有 rule 文件、prefix rule 或 session allowlist。
+- `change_directory` / `add_dir` 已有第一版协议和 desktop 入口；session resume 会按持久化 workspace snapshot 重新验证并恢复这些 policy 变化。
+- `ExecPolicy` 已有第一版独立模型，支持 prefix allow/ask/deny、session allowlist 和 dangerous prefix suggestion denylist。
+- 命令策略已有 trust-gated project-local rule 文件加载第一片。
 - CLI 路径没有完整 approve/deny/retry 闭环。
-- session resume 没有完整恢复 workspace policy、permission mode、additional dirs 和 current dir。
-- `AGENTS.md` 还没有按 project root 到 cwd 的分层加载。
+- session resume 已恢复 workspace policy、additional dirs 和 current dir；permission mode 仍未产品化持久化。
+- `AGENTS.md` 已按 project root 到 cwd 分层加载；project-local policy config 已接 trust gate 第一片，后续补 UI 和持久化编辑体验。
 
 ## 当前落地状态
 
@@ -81,13 +82,16 @@ Codex-mini 的 workspace 与权限系统要满足这些目标：
 - `security/permissions.py` 已提供 `FileSystemPolicy`、`PermissionProfile`、`ApprovalPolicy` 和 `NetworkPolicy`。
 - 工具读写和命令 cwd 已通过 `SecurityPolicy` 统一使用 filesystem policy。
 - macOS Seatbelt profile 已从 filesystem/network policy 生成，不再使用固定全局读模板。
+- `security/exec_policy.py` 已提供 prefix allow/ask/deny、session allow、危险命令拒绝和 `suggested_prefix_rule`。
+- `server/processors/request_dispatcher.py` 已支持 `change_directory`、`add_dir` 和 `workspace_policy_changed`。
+- `workspace/instructions.py` 已支持从 `project_root` 到 `current_dir` 分层加载 `AGENTS.md`，并避免 external additional root 越界加载。
+- desktop TitleBar 已有打开 workspace、切换 current dir 和加入 additional root 的原生目录选择入口。
 
 尚未落地到代码的部分：
 
-- 没有 richer `ExecPolicy` rule 文件、prefix/session allowlist 或 dangerous suggestion denylist。
-- `AdditionalRoot` 还没有进入 desktop protocol。
-- `WorkspaceTrust` 目前只有 session-only 默认值，还没有持久信任或 project-local config gate。
-- `current_dir` 还不能通过协议变化，也没有 resume 重新验证。
+- 没有 trust/untrust 前端入口或完整策略编辑 UI。
+- 运行时 session allowlist 还没有恢复到 trusted project/user config。
+- workspace resume 已按当前 v2 schema 严格重新验证 `selected_root`、`project_root`、`current_dir` 和 `additional_roots`；permission profile 仍未产品化持久化。
 
 下一阶段落地时，应把本文档当作目标架构，把 `docs/PROJECT_ARCHITECTURE_STATUS.md` 当作当前代码事实。两者不一致时，优先以代码事实为准，再同步更新文档。
 
@@ -194,11 +198,12 @@ class WorkspaceTrust:
 - 不加载项目本地 `.codex-mini/config.toml` 的高风险能力。
 - 不持久保存信任选择。
 
-后续再引入 trusted project：
+当前已引入 trusted project 第一片：
 
 - 以 canonical git root 或 selected root 作为 trust key。
 - 只有 trusted project 才加载 project-local config、hooks、exec policy。
 - project-local config 有 denylist，不能设置模型 provider、API endpoint、credential path、外部 notifier 之类高风险项。
+- 目前已有用户侧 trust store 和 project-local policy config 白名单读取；后续补 trust/untrust UI、hooks/MCP gate 和策略编辑器。
 
 ### AdditionalRoot
 
@@ -214,9 +219,9 @@ class AdditionalRoot:
 规则：
 
 - additional root 必须显式加入，不能由工具执行自动创建。
-- 写权限 additional root 需要用户批准。
+- 写权限 additional root 必须来自用户显式选择；当前 desktop 入口会让用户在加入目录时选择 read/write。
 - additional root 也要保护 metadata，例如其中的 `.git`、`.codex-mini`、`.env`。
-- 不存在的 additional root 在 resume 时丢弃并发 warning。
+- 不存在的 additional root 在 resume 时直接让恢复失败，返回 `workspace_error`；当前协议不做旧数据兼容或静默修复。
 
 ## 权限模型
 
@@ -567,10 +572,11 @@ session_resumed
 resume 时：
 
 - `selected_root` 不存在：返回 `workspace_error`，要求用户重新打开 workspace。
-- `project_root` 不存在：尝试从 selected root 重新推导。
-- `current_dir` 不存在：回退 selected root，并发 warning。
-- additional root 不存在：丢弃并发 warning。
-- permission profile 不可用：降级为 `workspace_write` 或 `read_only`，并记录 warning。
+- `project_root` 不存在或与当前 selected root 推导结果不一致：返回 `workspace_error`。
+- `current_dir` 不存在、缺失或不在已授权目录内：返回 `workspace_error`。
+- `additional_roots` 缺失、格式错误或任一目录不可用：返回 `workspace_error`。
+- 旧 `root` / `allowed_roots` 快照不再兼容；需要清理旧数据时显式运行 `make clean-sessions`。
+- permission profile 当前不参与恢复兼容；后续产品化前不得在 resume 时静默升级。
 - project trust 不应在 resume 时静默升级。
 
 ## AGENTS.md / Project Docs
@@ -605,13 +611,14 @@ session overrides
 runtime approval decisions
 ```
 
-第一版只做：
+已落地的第一版：
 
 - system defaults
+- trusted project config 的白名单读取
 - session overrides
 - runtime approval decisions
 
-第二版再做 user config 和 trusted project config。
+第二版继续补 user config、trust UI 和策略编辑持久化。
 
 project-local config denylist：
 
@@ -656,7 +663,7 @@ project-local config denylist：
 状态：
 
 - 已完成第一版实现和单元测试覆盖。
-- 后续 resume 重新验证会在 PR6 继续补齐。
+- PR6 已补齐第一版 resume 重新验证。
 
 ### PR2: Unified Security Context
 
@@ -681,7 +688,7 @@ project-local config denylist：
 - 所有 path resolver 统一使用 current_dir + workspace policy。
 - `.codex-mini` 加入 protected metadata。
 - `.env` 默认 deny read/write。
-- additional roots 先建模型，不急着做 UI。
+- additional roots 先建模型，并在 PR5 接入第一版 WebSocket/desktop 入口。
 
 验收：
 
@@ -693,7 +700,7 @@ project-local config denylist：
 状态：
 
 - 已完成第一版实现和单元测试覆盖。
-- additional roots 还没有 desktop/UI 协议入口。
+- additional roots 已有第一版 desktop/UI 协议入口，并会在 resume 时重新验证；后续补 project-local 持久配置边界。
 - Seatbelt profile 已从 filesystem/network policy 生成，后续继续补更细的 glob/special path 规则。
 
 ### PR3: Policy-driven Seatbelt
@@ -729,7 +736,9 @@ project-local config denylist：
 
 - `security/exec_policy.py`
 - `security/policy.py`
-- `server/app.py`
+- `server/runtime/turn_runner.py`
+- `desktop/src/renderer/src/components/PermissionDialog.vue`
+- `desktop/src/renderer/src/stores/runtime.ts`
 - `tests/test_exec_policy.py`
 
 交付：
@@ -746,6 +755,12 @@ project-local config denylist：
 - `rm -rf /` 直接 deny。
 - approval policy `NEVER` 下 ask 变 deny。
 
+状态：
+
+- 已完成第一版实现和单元测试覆盖。
+- WebSocket `permission_decision` 支持 `scope=session` 与 `prefix_rule`，前端在存在 `suggested_prefix_rule` 时展示本会话同类命令批准入口。
+- 已有 trust-gated project-local exec policy 配置文件第一片，但还没有跨 session 持久运行时批准规则。
+
 ### PR5: Workspace Protocol and Desktop UI
 
 修改范围：
@@ -757,17 +772,18 @@ project-local config denylist：
 
 交付：
 
-- `change_directory`。
-- `add_dir`。
-- `workspace_policy_changed`。
-- 权限弹窗展示 profile、cwd、command、prefix suggestion。
+- `change_directory`。（已完成第一版）
+- `add_dir`。（已完成第一版）
+- `workspace_policy_changed`。（已完成第一版）
+- TitleBar 显示 selected root/current dir，并提供切换目录和加入额外目录入口。（已完成第一版）
+- 权限弹窗展示 profile、cwd、command、prefix suggestion。（prefix suggestion 已完成；profile/cwd 还需继续补齐）
 
 验收：
 
-- UI 能显示 selected root 和 current dir。
-- 切 cwd 不创建新 session。
-- open workspace 创建新 session。
-- add dir 必须走 permission request。
+- UI 能显示 selected root 和 current dir。（已完成）
+- 切 cwd 不创建新 session。（已完成）
+- open workspace 创建新 session。（已完成）
+- add dir 必须来自用户显式选择，并进入 runtime policy。（已完成第一版）
 
 ### PR6: Resume and Project Docs
 
@@ -781,16 +797,44 @@ project-local config denylist：
 
 交付：
 
-- workspace snapshot 写入 transcript。
-- resume 重新验证 workspace。
-- `AGENTS.md` 从 project_root 到 current_dir 分层加载。
-- 依赖 current_dir 的缓存失效机制。
+- workspace snapshot 写入 session metadata，policy 变化写入 `workspace_policy_changed` transcript。（已完成第一版）
+- resume 重新验证 workspace。（已完成第一版）
+- `AGENTS.md` 从 project_root 到 current_dir 分层加载。（已完成第一版）
+- 依赖 current_dir 的 system prompt 刷新机制。（已完成第一版）
 
 验收：
 
-- 删除 current_dir 后 resume 回退 selected_root。
-- 删除 additional root 后 resume 丢弃并 warning。
-- project docs 不越过 project_root。
+- 删除 current_dir 后 resume 返回 `workspace_error`。（已完成）
+- 删除 additional root 后 resume 返回 `workspace_error`。（已完成）
+- project docs 不越过 project_root。（已完成）
+
+### PR7: Trust-Gated Project Config
+
+修改范围：
+
+- `workspace/trust.py`
+- `workspace/project_config.py`
+- `workspace/manager.py`
+- `server/runtime/session_state.py`
+- `server/runtime/websocket_context.py`
+- `context/permissions_context.py`
+- `tests/test_workspace.py`
+
+交付：
+
+- 用户侧 trust store 第一版。（已完成）
+- 默认 `session_only` workspace 不读取 `.codex-mini/config.toml`。（已完成）
+- trusted project 可读取白名单 permission / exec policy config。（已完成第一版）
+- project-local config denylist：model/API/credential/hooks/sandbox 等敏感字段直接拒绝。（已完成第一版）
+- 过宽 exec allow rule 直接拒绝。（已完成第一版）
+- resume 不会因为当前 trust store 变成 trusted 而静默升级旧 session 权限。（已完成）
+
+验收：
+
+- 未 trusted 项目里的 `.codex-mini/config.toml` 被忽略。（已完成）
+- trusted 项目里的 read-only / approval / exec deny rule 会进入 ToolRunner。（已完成）
+- trusted 项目的敏感配置和过宽 allow rule 返回 `workspace_error`。（已完成）
+- trusted snapshot 在当前 trust store 不可信时恢复失败。（已完成）
 
 ## 测试矩阵
 
@@ -810,6 +854,7 @@ project-local config denylist：
 
 - WebSocket `open_workspace`。
 - WebSocket `change_directory`。
+- WebSocket `add_dir` / `workspace_policy_changed`。
 - permission request approve retry。
 - permission request deny result。
 - session suspend/resume。
@@ -836,7 +881,7 @@ project-local config denylist：
 第一轮不做：
 
 - 完整 worktree 产品 UI。
-- 完整 project trust 持久化。
+- 完整 project trust UI 和策略编辑器。
 - 复杂 glob policy 编辑器。
 - MCP tool 权限治理。
 - network proxy。
@@ -846,7 +891,7 @@ project-local config denylist：
 
 ## 推荐底线
 
-下一步不要先做漂亮的 workspace UI，也不要先扩 permission 弹窗。应该先把 runtime 内核边界打准：
+当前 runtime 内核边界已经按以下五点打准，后续再补 trust gate 和产品化 UI：
 
 1. `project_root` 和 `current_dir` 分离。
 2. 所有工具统一走 `FileSystemPolicy`。
@@ -854,4 +899,4 @@ project-local config denylist：
 4. approval 决策写入 transcript。
 5. resume 重新验证 workspace snapshot。
 
-这五件事做完，Codex-mini 的 workspace 和权限策略才算真正和 Codex / Claude Code 的工程方向对齐。
+这五件事完成后，Codex-mini 的 workspace 和权限策略已经和 Codex / Claude Code 的工程方向完成第一阶段对齐。

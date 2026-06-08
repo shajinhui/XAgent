@@ -7,10 +7,11 @@ WebSocket 入口只负责收发 packet；本模块负责一轮 user_input 之后
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from typing import Any, Dict, List
 
 from server.protocol.events import build_event
-from server.runtime.model_config import ModelRequestConfig
+from server.runtime.model_config import ModelRequestConfig, configure_litellm_environment
 from server.runtime.model_stream import (
     build_assistant_message,
     extract_stream_delta,
@@ -31,6 +32,16 @@ from tools.core.router import ToolRouter
 from tools.core.types import ToolResult
 
 
+@dataclass(frozen=True)
+class PermissionDecision:
+    """前端对一次 permission_request 的回答。"""
+
+    approved: bool
+    feedback: str | None = None
+    scope: str = "once"
+    prefix_rule: tuple[str, ...] | None = None
+
+
 async def stream_model_message(
     ws: Any,
     registry: ToolRegistry,
@@ -41,6 +52,7 @@ async def stream_model_message(
 ) -> Dict[str, Any]:
     """流式请求模型，并把 token 增量和 tool_call 增量整理成 assistant message。"""
 
+    configure_litellm_environment()
     from litellm import completion
 
     stream = completion(
@@ -90,7 +102,7 @@ async def wait_for_permission_decision(
     session_id: str,
     turn_id: str,
     request_id: str,
-) -> tuple[bool, str | None]:
+) -> PermissionDecision:
     """等待前端返回与当前工具调用匹配的权限决定。"""
 
     while True:
@@ -122,7 +134,13 @@ async def wait_for_permission_decision(
             continue
 
         feedback = (decision.get("feedback") or "").strip()
-        return bool(decision.get("approved")), feedback or None
+        scope = "session" if decision.get("scope") == "session" else "once"
+        return PermissionDecision(
+            approved=bool(decision.get("approved")),
+            feedback=feedback or None,
+            scope=scope,
+            prefix_rule=_normalize_prefix_rule(decision.get("prefix_rule")),
+        )
 
 
 async def wait_for_clarification_response(
@@ -424,12 +442,17 @@ async def run_turn(
                         metadata=metadata,
                     )
                 )
-                approved, user_feedback = await wait_for_permission_decision(
+                permission_decision = await wait_for_permission_decision(
                     ws,
                     session_id,
                     turn_id,
                     request_id,
                 )
+                approved = permission_decision.approved
+                user_feedback = permission_decision.feedback
+                remembered_prefix = _approved_session_prefix(metadata, permission_decision)
+                if remembered_prefix:
+                    runner.ctx.policy.allow_prefix_for_session(remembered_prefix)
                 record_transcript_event(
                     session_store,
                     session_id,
@@ -440,6 +463,8 @@ async def run_turn(
                         "tool": tool_name,
                         "approved": approved,
                         "feedback": user_feedback,
+                        "scope": permission_decision.scope,
+                        "prefix_rule": list(remembered_prefix) if remembered_prefix else None,
                     },
                 )
                 await ws.send_json(
@@ -505,6 +530,32 @@ def _normalize_clarification_response(response: Dict[str, Any]) -> Dict[str, Any
             pass
 
     return normalized
+
+
+def _normalize_prefix_rule(value: Any) -> tuple[str, ...] | None:
+    if not isinstance(value, list):
+        return None
+    parts: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            return None
+        text = item.strip()
+        if not text:
+            return None
+        parts.append(text)
+    return tuple(parts) if parts else None
+
+
+def _approved_session_prefix(
+    metadata: Dict[str, Any],
+    decision: PermissionDecision,
+) -> tuple[str, ...] | None:
+    if not decision.approved or decision.scope != "session":
+        return None
+    suggested = _normalize_prefix_rule(metadata.get("suggested_prefix_rule"))
+    if suggested and decision.prefix_rule == suggested:
+        return suggested
+    return None
 
 
 def _has_clarification_answer(response: Dict[str, Any]) -> bool:

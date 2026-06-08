@@ -7,11 +7,13 @@ from pathlib import Path
 
 from sandbox.macos_executor import SecureMacOSSandboxExecutor
 from security.circuit_breaker import CircuitBreaker
+from security.exec_policy import ExecPolicy
 from security.permissions import ApprovalPolicy, FileSystemPolicy, NetworkPolicy, PermissionProfile
 from security.policy import SecurityPolicy
 from tools.core.context import ToolInvocation
 from tools.core.registry import ToolRegistry
 from tools.core.types import ToolExecutionContext, ToolPermissionError, ToolResult
+from workspace import AdditionalRoot
 
 
 def create_tool_context(
@@ -20,10 +22,13 @@ def create_tool_context(
     *,
     project_root: Path | None = None,
     current_dir: Path | None = None,
+    additional_roots: tuple[AdditionalRoot, ...] | list[AdditionalRoot] = (),
     filesystem_policy: FileSystemPolicy | None = None,
+    exec_policy: ExecPolicy | None = None,
     network_policy: NetworkPolicy = NetworkPolicy.RESTRICTED,
     permission_profile: PermissionProfile = PermissionProfile.WORKSPACE_WRITE,
     approval_policy: ApprovalPolicy = ApprovalPolicy.ASK_BEFORE_MUTATING,
+    circuit_breaker: CircuitBreaker | None = None,
 ) -> ToolExecutionContext:
     selected = selected_root.resolve()
     project = (project_root or selected).resolve()
@@ -32,12 +37,14 @@ def create_tool_context(
         selected,
         current,
         permission_profile,
+        additional_roots,
     )
     policy = SecurityPolicy(
         selected,
         project_root=project,
         current_dir=current,
         filesystem_policy=resolved_filesystem_policy,
+        exec_policy=exec_policy,
         permission_profile=permission_profile,
         approval_policy=approval_policy,
     )
@@ -51,7 +58,7 @@ def create_tool_context(
         network_policy=network_policy,
         permission_profile=permission_profile,
         approval_policy=approval_policy,
-        circuit_breaker=CircuitBreaker(threshold=3),
+        circuit_breaker=circuit_breaker or CircuitBreaker(threshold=3),
         command_executor=SecureMacOSSandboxExecutor(selected),
     )
 
@@ -161,7 +168,16 @@ def _filesystem_policy_for_profile(
     selected_root: Path,
     current_dir: Path,
     permission_profile: PermissionProfile,
+    additional_roots: tuple[AdditionalRoot, ...] | list[AdditionalRoot] = (),
 ) -> FileSystemPolicy:
     if permission_profile == PermissionProfile.READ_ONLY:
-        return FileSystemPolicy.read_only(selected_root, current_dir=current_dir)
-    return FileSystemPolicy.workspace_write(selected_root, current_dir=current_dir)
+        return FileSystemPolicy.read_only(
+            selected_root,
+            current_dir=current_dir,
+            additional_roots=additional_roots,
+        )
+    return FileSystemPolicy.workspace_write(
+        selected_root,
+        current_dir=current_dir,
+        additional_roots=additional_roots,
+    )

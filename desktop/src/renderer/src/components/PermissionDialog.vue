@@ -7,7 +7,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  approve: []
+  approve: [scope?: 'once' | 'session']
   deny: [feedback?: string]
 }>()
 
@@ -23,6 +23,12 @@ const formattedArguments = computed(() => {
 })
 
 const question = computed(() => `是否允许执行 ${props.request.tool}？`)
+const suggestedPrefixRule = computed(() => {
+  const value = props.request.metadata.suggested_prefix_rule
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+})
+const suggestedPrefixLabel = computed(() => suggestedPrefixRule.value.join(' '))
 
 function submitFeedback(): void {
   emit('deny', feedback.value.trim() || undefined)
@@ -39,12 +45,21 @@ function submitFeedback(): void {
     <pre v-if="formattedArguments" class="permission-command">{{ formattedArguments }}</pre>
 
     <div v-if="!showDenyFeedback" class="permission-options" aria-label="权限选择">
-      <button class="permission-option" type="button" @click="emit('approve')">
+      <button class="permission-option" type="button" @click="emit('approve', 'once')">
         <span>1.</span>
         <strong>是，允许本次操作</strong>
       </button>
-      <button class="permission-option" type="button" @click="showDenyFeedback = true">
+      <button
+        v-if="suggestedPrefixRule.length"
+        class="permission-option"
+        type="button"
+        @click="emit('approve', 'session')"
+      >
         <span>2.</span>
+        <strong>本会话允许 {{ suggestedPrefixLabel }}</strong>
+      </button>
+      <button class="permission-option" type="button" @click="showDenyFeedback = true">
+        <span>{{ suggestedPrefixRule.length ? '3.' : '2.' }}</span>
         <strong>否，告诉 Agent 如何调整</strong>
       </button>
     </div>

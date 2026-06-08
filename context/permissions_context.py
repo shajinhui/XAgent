@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from workspace import WorkspaceContext
+from workspace.project_config import default_project_policy
 
 
 DEFAULT_PROTECTED_PATHS = (".env", ".git", ".venv", "__pycache__", ".codex-mini")
@@ -33,10 +34,13 @@ class PermissionsContext:
 
     @classmethod
     def from_workspace(cls, workspace: WorkspaceContext) -> "PermissionsContext":
+        project_policy = workspace.project_policy or default_project_policy()
         return cls(
             selected_root=workspace.selected_root,
             project_root=workspace.project_root,
             additional_roots=tuple(root.as_dict() for root in workspace.additional_roots),
+            approval_policy=project_policy.approval_policy.value,
+            network_allowed=project_policy.network_policy.value == "enabled",
         )
 
     def as_dict(self) -> Dict[str, Any]:

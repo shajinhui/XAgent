@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from sandbox.macos_executor import CommandExecResult
+from security import ApprovalPolicy, ExecPolicy
 from tools.core.catalog import build_default_registry, builtin_tools
 from tools.core.protocol import FunctionTool
 from tools.core.registry import ToolRegistry as CoreToolRegistry
@@ -18,6 +19,12 @@ from tools.core.types import ToolMeta, ToolPermissionError, ToolResult
 def build_default_runner(root: Path, session_id: str = "default") -> tuple[CoreToolRegistry, ToolRunner]:
     registry = build_default_registry()
     runner = ToolRunner(registry, create_tool_context(root, session_id))
+    return registry, runner
+
+
+def build_runner_with_exec_policy(root: Path, exec_policy: ExecPolicy) -> tuple[CoreToolRegistry, ToolRunner]:
+    registry = build_default_registry()
+    runner = ToolRunner(registry, create_tool_context(root, exec_policy=exec_policy))
     return registry, runner
 
 
@@ -169,6 +176,7 @@ class ToolRegistryTests(unittest.TestCase):
             self.assertFalse(result.ok)
             self.assertEqual(result.metadata["permission_action"], "ask")
             self.assertEqual(result.metadata["category"], "command_approval")
+            self.assertEqual(result.metadata["suggested_prefix_rule"], ["ruff", "check"])
 
     def test_ask_user_returns_clarification_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -222,6 +230,20 @@ class ToolRegistryTests(unittest.TestCase):
             self.assertEqual(result.metadata["permission_action"], "ask")
             self.assertEqual(result.metadata["category"], "command_approval")
 
+    def test_run_command_approval_policy_never_denies_permission_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = build_default_registry()
+            runner = ToolRunner(
+                registry,
+                create_tool_context(Path(tmp), approval_policy=ApprovalPolicy.NEVER),
+            )
+
+            result = runner.execute("run_command", json.dumps({"command": "echo ok"}))
+
+            self.assertFalse(result.ok)
+            self.assertEqual(result.metadata["permission_action"], "deny")
+            self.assertEqual(result.metadata["category"], "approval_unavailable")
+
     def test_run_command_invalid_cwd_is_denied(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             _registry, runner = build_default_runner(Path(tmp))
@@ -258,6 +280,27 @@ class ToolRegistryTests(unittest.TestCase):
             self.assertEqual(run_mock.call_args.kwargs["cwd"], nested.resolve())
             self.assertIs(run_mock.call_args.kwargs["filesystem_policy"], runner.ctx.filesystem_policy)
             self.assertEqual(run_mock.call_args.kwargs["network_policy"], runner.ctx.network_policy)
+
+    def test_run_command_session_allow_prefix_skips_permission_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _registry, runner = build_runner_with_exec_policy(
+                root,
+                ExecPolicy.with_session_allow([("npm", "run", "test")]),
+            )
+
+            with patch.object(
+                runner.ctx.command_executor,
+                "run",
+                return_value=CommandExecResult(True, 0, "ok\n", ""),
+            ) as run_mock:
+                result = runner.execute(
+                    "run_command",
+                    json.dumps({"command": "npm run test -- --watch=false"}),
+                )
+
+            self.assertTrue(result.ok)
+            self.assertTrue(run_mock.called)
 
     def test_mutating_file_tool_requires_approval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

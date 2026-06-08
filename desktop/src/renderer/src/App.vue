@@ -33,8 +33,11 @@ const SIDEBAR_MAX_WIDTH = 360
 const SIDEBAR_WIDTH_STORAGE_KEY = 'codex-mini.sidebar-width'
 
 const visibleProjects = computed(() => runtime.workspaceProjects)
+const hasConversationStarted = computed(() =>
+  chat.messages.some((message) => message.role === 'user')
+)
 const conversationSessions = computed<ConversationSessionItem[]>(() => {
-  const sessions = runtime.conversationSelectedRoots.flatMap((root) => {
+  const candidates = runtime.conversationSelectedRoots.flatMap((root) => {
     const workspaceSessions =
       runtime.workspace?.selected_root === root && runtime.sessionHistory.length
         ? runtime.sessionHistory
@@ -46,7 +49,14 @@ const conversationSessions = computed<ConversationSessionItem[]>(() => {
     }))
   })
 
-  return sessions.sort((left, right) => right.updated_at - left.updated_at)
+  const seen = new Set<string>()
+  return candidates
+    .sort((left, right) => right.updated_at - left.updated_at)
+    .filter((session) => {
+      if (seen.has(session.session_id)) return false
+      seen.add(session.session_id)
+      return true
+    })
 })
 
 const composerPlaceholder = computed(() => {
@@ -180,6 +190,33 @@ async function openWorkspaceFromDialog(): Promise<void> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     chat.addSystemMessage(`打开工作区失败：${message}`)
+  }
+}
+
+async function changeDirectoryFromDialog(): Promise<void> {
+  if (!runtime.workspace) return
+
+  try {
+    const selectedPath = await window.api.openWorkspaceDirectory(runtime.workspace.current_dir)
+    if (!selectedPath) return
+    await runtime.changeDirectory(selectedPath)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    chat.addSystemMessage(`切换当前目录失败：${message}`)
+  }
+}
+
+async function addWorkspaceDirectoryFromDialog(): Promise<void> {
+  if (!runtime.workspace) return
+
+  try {
+    const selectedPath = await window.api.openWorkspaceDirectory(runtime.workspace.selected_root)
+    if (!selectedPath) return
+    const access = window.confirm('允许这个额外目录写入吗？') ? 'write' : 'read'
+    await runtime.addWorkspaceDirectory(selectedPath, access)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    chat.addSystemMessage(`加入额外目录失败：${message}`)
   }
 }
 
@@ -376,19 +413,27 @@ onBeforeUnmount(() => {
                   class="sidebar-item"
                   :class="{ selected: session.session_id === runtime.selectedSessionId }"
                   :title="session.last_message || session.title"
-                  @click="void runtime.resumeSessionInWorkspace(project.selected_root, session.session_id)"
+                  @click="
+                    void runtime.resumeSessionInWorkspace(project.selected_root, session.session_id)
+                  "
                   @contextmenu="openSessionContextMenu($event, session, project.selected_root)"
                 >
                   <span>{{ session.title }}</span>
                   <small>{{ formatSessionUpdatedAt(session.updated_at) }}</small>
                 </button>
                 <p
-                  v-if="runtime.sessionsLoading && runtime.workspace?.selected_root === project.selected_root"
+                  v-if="
+                    runtime.sessionsLoading &&
+                    runtime.workspace?.selected_root === project.selected_root
+                  "
                   class="sidebar-empty"
                 >
                   正在加载
                 </p>
-                <p v-else-if="!sessionsForProject(project.selected_root).length" class="sidebar-empty">
+                <p
+                  v-else-if="!sessionsForProject(project.selected_root).length"
+                  class="sidebar-empty"
+                >
                   暂无历史会话
                 </p>
               </div>
@@ -422,9 +467,7 @@ onBeforeUnmount(() => {
             class="sidebar-item conversation-item"
             :class="{ selected: session.session_id === runtime.selectedSessionId }"
             :title="session.last_message || session.title"
-            @click="
-              void runtime.resumeSessionInWorkspace(session.selectedRoot, session.session_id)
-            "
+            @click="void runtime.resumeSessionInWorkspace(session.selectedRoot, session.session_id)"
             @contextmenu="openSessionContextMenu($event, session, session.selectedRoot)"
           >
             <span>{{ session.title }}</span>
@@ -473,7 +516,11 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <section class="chat-window" aria-label="Codex-mini chat preview">
+    <section
+      class="chat-window"
+      :class="{ 'conversation-empty': !hasConversationStarted }"
+      aria-label="Codex-mini chat preview"
+    >
       <TitleBar
         :title="chat.conversationTitle"
         :title-status="chat.conversationTitleStatus"
@@ -488,6 +535,8 @@ onBeforeUnmount(() => {
         @resume="runtime.resumeSession"
         @new-conversation="createDefaultConversationWorkspace"
         @open-workspace="openWorkspaceFromDialog"
+        @change-directory="changeDirectoryFromDialog"
+        @add-directory="addWorkspaceDirectoryFromDialog"
       />
       <MessageList :messages="chat.messages" />
       <div class="composer-zone">

@@ -6,8 +6,8 @@ from typing import Any, Dict, List, TypedDict
 
 from dotenv import load_dotenv
 from langgraph.graph import END, START, StateGraph
-from litellm import completion
 
+from server.runtime.model_config import configure_litellm_environment
 from tools.core.catalog import build_default_registry
 from tools.core.registry import ToolRegistry
 from tools.core.router import ToolRouter
@@ -33,15 +33,10 @@ class AgentState(TypedDict):
 def _build_model_name() -> str:
     """根据环境变量构建模型标识字符串。
 
-    约定：使用 `MODEL_PROVIDER` 和 `MODEL_NAME` 环境变量，例如
-    - provider=openai, model=gpt-4o-mini -> "openai/gpt-4o-mini"
-
-    返回值：供 `litellm.completion` 使用的 model 参数字符串。
+    约定：`MODEL_NAME` 保存服务商原始模型 id；`MODEL_PROVIDER` 只用于服务商特定行为判断。
     """
 
-    provider = os.getenv("MODEL_PROVIDER", "openai").strip()
-    model = os.getenv("MODEL_NAME", "gpt-4o-mini").strip()
-    return f"{provider}/{model}"
+    return os.getenv("MODEL_NAME", "gpt-4o-mini").strip() or "gpt-4o-mini"
 
 
 def _build_api_kwargs() -> Dict[str, str]:
@@ -75,9 +70,18 @@ def _normalize_reasoning_effort() -> str:
 
 
 def _build_completion_kwargs(model_name: str) -> Dict[str, Any]:
-    kwargs: Dict[str, Any] = {"model": model_name, **_build_api_kwargs()}
     reasoning_effort = _normalize_reasoning_effort()
-    if model_name.startswith("deepseek/"):
+    provider = os.getenv("MODEL_PROVIDER", "").strip().lower()
+    model = model_name.lower()
+    litellm_model = (
+        f"deepseek/{model_name}"
+        if "/" not in model_name and (provider == "deepseek" or model.startswith("deepseek-"))
+        else model_name
+    )
+    kwargs: Dict[str, Any] = {"model": litellm_model, **_build_api_kwargs()}
+    if model.startswith("deepseek/") or model.startswith("deepseek-") or (
+        provider == "deepseek" and "/" not in model
+    ):
         kwargs["extra_body"] = {
             "thinking": {"type": "disabled" if reasoning_effort == "off" else "enabled"}
         }
@@ -99,6 +103,9 @@ def call_model(state: AgentState, registry: ToolRegistry) -> AgentState:
 
     注意：completion 中会传入 `tools=registry.schemas()`，让模型能够以结构化方式选择工具调用（若需要）。
     """
+
+    configure_litellm_environment()
+    from litellm import completion
 
     model_name = _build_model_name()
     # 调用 litellm completion；传入当前的对话消息和工具定义

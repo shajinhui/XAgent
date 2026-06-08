@@ -117,19 +117,52 @@ export const useChatStore = defineStore('chat', {
 
     loadConversation(messages: RuntimeDisplayMessage[], title: string): void {
       const cleanTitle = title.trim() || '历史会话'
+      const activityGroupIds = new Map<string, number>()
+      const restoredMessages: ChatMessage[] = []
+
+      for (const message of messages) {
+        const id = createMessageId()
+        const activityKey =
+          message.activity_key || (message.role === 'activity' ? `activity:${id}` : '')
+        const activityGroupId = activityKey ? activityGroupIds.get(activityKey) : undefined
+
+        if (message.role === 'activity' && activityKey) {
+          activityGroupIds.set(activityKey, id)
+        }
+
+        const restoredMessage: ChatMessage = {
+          id,
+          role: message.role,
+          content: message.content,
+          collapsed: message.role === 'activity' ? (message.collapsed ?? true) : message.collapsed,
+          startedAt: message.startedAt,
+          finishedAt: message.finishedAt,
+          activityGroupId,
+          isFinal: message.role === 'assistant' ? (message.isFinal ?? true) : message.isFinal
+        }
+
+        if (message.role === 'activity_event' && message.step) {
+          restoredMessage.step = {
+            id: createMessageId(),
+            label: message.step.label || message.content,
+            status: message.step.status,
+            kind: message.step.kind,
+            detail: message.step.detail,
+            requestId: message.step.requestId
+          }
+        }
+
+        restoredMessages.push(restoredMessage)
+      }
+
       this.conversationTitle = cleanTitle
       this.conversationTitleGenerated = cleanTitle !== '新对话'
       this.conversationTitleRequestId = ''
       this.conversationTitleStatus = cleanTitle === '新对话' ? 'idle' : 'ready'
       this.streamingMessageId = null
       this.activeActivityMessageId = null
-      this.messages = messages.length
-        ? messages.map((message) => ({
-            id: createMessageId(),
-            role: message.role,
-            content: message.content,
-            isFinal: message.role === 'assistant'
-          }))
+      this.messages = restoredMessages.length
+        ? restoredMessages
         : [
             {
               id: createMessageId(),

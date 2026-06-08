@@ -6,16 +6,17 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 
-DEFAULT_MODEL_OPTIONS = (
-    "openai/gpt-4o-mini",
-    "deepseek/deepseek-chat",
-    "deepseek/deepseek-reasoner",
-)
+PROVIDER_MODEL_ENDPOINTS = {
+    "deepseek": "https://api.deepseek.com",
+}
 REASONING_EFFORT_OPTIONS = ("off", "low", "medium", "high", "max")
 REASONING_EFFORT_ALIASES = {
     "": "off",
@@ -27,6 +28,16 @@ REASONING_EFFORT_ALIASES = {
     "normal": "medium",
     "xhigh": "max",
 }
+
+
+def configure_litellm_environment() -> None:
+    """配置 LiteLLM 的本地运行默认值。
+
+    LiteLLM 默认会联网拉取模型价格表；本项目不依赖这份远程价格表，且本地开发时
+    网络/SSL 波动会产生大量无意义 warning，所以默认使用包内置的本地备份。
+    """
+
+    os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 
 @dataclass(frozen=True)
@@ -48,7 +59,7 @@ class ModelRequestConfig:
         """转换为 LiteLLM completion 可直接接收的参数。"""
 
         kwargs: Dict[str, Any] = {
-            "model": self.model,
+            "model": build_litellm_model_name(self.model),
             **build_api_kwargs(),
         }
         if self._uses_deepseek_thinking_api():
@@ -72,7 +83,11 @@ class ModelRequestConfig:
         return kwargs
 
     def _uses_deepseek_thinking_api(self) -> bool:
-        return self.model.startswith("deepseek/")
+        provider = os.getenv("MODEL_PROVIDER", "").strip().lower()
+        model = self.model.lower()
+        return model.startswith("deepseek/") or model.startswith("deepseek-") or (
+            provider == "deepseek" and "/" not in model
+        )
 
     def _deepseek_reasoning_effort(self) -> str:
         if self.reasoning_effort == "max":
@@ -81,7 +96,7 @@ class ModelRequestConfig:
 
 
 def normalize_model_name(value: Any) -> str | None:
-    """校验前端传入的 provider/model 形式模型名。"""
+    """校验前端传入的模型名，兼容 `provider/model` 与服务商原始 id。"""
 
     if not isinstance(value, str):
         return None
@@ -91,17 +106,13 @@ def normalize_model_name(value: Any) -> str | None:
         return None
     if any(char.isspace() for char in model):
         return None
-    if "/" not in model:
-        return None
     return model
 
 
 def build_default_model_name() -> str:
-    """从主模型环境变量构建默认模型名。"""
+    """从主模型环境变量读取默认模型 id。"""
 
-    provider = os.getenv("MODEL_PROVIDER", "openai").strip()
-    model = os.getenv("MODEL_NAME", "gpt-4o-mini").strip()
-    return f"{provider}/{model}"
+    return os.getenv("MODEL_NAME", "gpt-4o-mini").strip() or "gpt-4o-mini"
 
 
 def build_low_cost_model_name(model_override: Any | None = None) -> str:
@@ -111,9 +122,25 @@ def build_low_cost_model_name(model_override: Any | None = None) -> str:
     if normalized_override:
         return normalized_override
 
-    provider = os.getenv("LOW_COST_MODEL_PROVIDER", os.getenv("MODEL_PROVIDER", "openai")).strip()
-    model = os.getenv("LOW_COST_MODEL_NAME", os.getenv("MODEL_NAME", "gpt-4o-mini")).strip()
-    return f"{provider}/{model}"
+    model = os.getenv("LOW_COST_MODEL_NAME", build_default_model_name()).strip()
+    return model or build_default_model_name()
+
+
+def build_litellm_model_name(model_name: str, provider: str | None = None) -> str:
+    """把产品层模型 id 转成 LiteLLM 需要的调用模型名。
+
+    前端和配置文件保存服务商原始 id，例如 `deepseek-v4-pro`；LiteLLM 调用 DeepSeek
+    时仍需要 `deepseek/deepseek-v4-pro`，所以只在出站请求前做这一层内部适配。
+    """
+
+    normalized_model = normalize_model_name(model_name) or build_default_model_name()
+    resolved_provider = (provider or os.getenv("MODEL_PROVIDER", "")).strip().lower()
+    lower_model = normalized_model.lower()
+    if "/" not in normalized_model and (
+        resolved_provider == "deepseek" or lower_model.startswith("deepseek-")
+    ):
+        return f"deepseek/{normalized_model}"
+    return normalized_model
 
 
 def build_model_name(model_override: Any | None = None) -> str:
@@ -162,15 +189,77 @@ def _parse_model_option_list(raw_value: str) -> List[str]:
     return options
 
 
-def build_model_options() -> List[str]:
-    """生成前端下拉可展示的模型候选列表。"""
+def fetch_provider_model_options(
+    provider: str | None = None,
+    *,
+    api_base: str | None = None,
+    api_key: str | None = None,
+    timeout_seconds: float = 3.0,
+    opener: Callable[..., Any] | None = None,
+) -> List[str]:
+    """从服务商 `/models` 接口拉取可用模型列表。
 
-    options = [
-        build_default_model_name(),
-        *_parse_model_option_list(os.getenv("MODEL_OPTIONS", "")),
-        *DEFAULT_MODEL_OPTIONS,
-    ]
-    return list(dict.fromkeys(option for option in options if normalize_model_name(option)))
+    当前先支持 DeepSeek：请求 `${API_BASE或默认DeepSeek地址}/models`。
+    成功时直接返回服务商给出的模型 id，不再额外加 provider 前缀；任何网络或格式错误都返回
+    空列表，让 ready 事件可以安全回退到本地 `MODEL_OPTIONS`。
+    """
+
+    resolved_provider = (provider or os.getenv("MODEL_PROVIDER", "openai")).strip().lower()
+    default_base = PROVIDER_MODEL_ENDPOINTS.get(resolved_provider)
+    if not default_base:
+        return []
+
+    resolved_api_key = (api_key if api_key is not None else os.getenv("API_KEY", "")).strip()
+    if not resolved_api_key:
+        return []
+
+    resolved_api_base = (api_base if api_base is not None else os.getenv("API_BASE", "")).strip()
+    endpoint = f"{(resolved_api_base or default_base).rstrip('/')}/models"
+    request = Request(
+        endpoint,
+        headers={
+            "Authorization": f"Bearer {resolved_api_key}",
+            "Accept": "application/json",
+        },
+    )
+
+    try:
+        open_fn = opener or urlopen
+        with open_fn(request, timeout=timeout_seconds) as response:
+            raw_payload = response.read().decode("utf-8")
+        payload = json.loads(raw_payload)
+    except (HTTPError, URLError, OSError, TimeoutError, ValueError, json.JSONDecodeError):
+        return []
+
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, list):
+        return []
+
+    options: List[str] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        model_id = str(item.get("id") or "").strip()
+        if not model_id:
+            continue
+        normalized_model = normalize_model_name(model_id)
+        if normalized_model and normalized_model not in options:
+            options.append(normalized_model)
+    return options
+
+
+def build_model_options() -> List[str]:
+    """生成前端下拉可展示的模型候选列表。
+
+    规则保持简单：远程 `/models` 成功就信任远程列表；失败时只回退到 env 中的
+    `MODEL_OPTIONS`。默认主模型通过 `default_model` 单独返回，不混进候选列表。
+    """
+
+    remote_options = fetch_provider_model_options()
+    if remote_options:
+        return remote_options
+
+    return _parse_model_option_list(os.getenv("MODEL_OPTIONS", ""))
 
 
 def build_model_request_config(packet: Dict[str, Any] | None = None) -> ModelRequestConfig:

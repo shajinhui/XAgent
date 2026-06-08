@@ -62,7 +62,7 @@ python agent_loop.py
 - `tools/shell/`：命令工具（macOS 原生沙箱执行）
 - `tools/network/`：可选联网工具
 - `tools/interaction/`：模型主动澄清提问工具
-- `security/`：路径校验、命令白名单、熔断器
+- `security/`：filesystem policy、exec policy、路径校验和熔断器
 - `sandbox/macos_executor.py`：macOS Seatbelt 安全执行器
 - `server/app.py`：FastAPI WebSocket 服务（`/agent/ws`）
 - `session/`：SQLite 会话索引、JSONL transcript、历史会话恢复和单轮 `TurnContext`
@@ -79,10 +79,15 @@ workspace 与权限策略专题架构见：[`docs/WORKSPACE_PERMISSION_ARCHITECT
 ## 说明
 
 - 模型调用统一配置 `API_KEY`，不要按服务商拆成 `OPENAI_API_KEY` / `DEEPSEEK_API_KEY`。
-- `MODEL_PROVIDER` / `MODEL_NAME` 是主 Agent 模型；`LOW_COST_MODEL_PROVIDER` / `LOW_COST_MODEL_NAME` 是标题生成、路由判断等简单任务使用的低成本模型，默认继承主模型。
-- 桌面端会从后端读取模型配置；`MODEL_OPTIONS` 可扩展输入栏旁边的模型下拉列表，`REASONING_EFFORT=off|low|medium|high|max` 可设置默认思考程度。DeepSeek 模型会额外按官方 thinking 参数处理：`off` 显式关闭 thinking，`low/medium` 映射为 `high`，`xhigh/max` 映射为 `max`。
-- 阶段 2 已将 `run_command` 切换到 macOS 原生沙箱执行，并增加命令白名单、风险拦截和工具元信息。
+- `MODEL_PROVIDER` 标识服务商，`MODEL_NAME` 是主 Agent 的原始模型 id；`LOW_COST_MODEL_PROVIDER` / `LOW_COST_MODEL_NAME` 是标题生成、路由判断等简单任务使用的低成本模型配置，默认继承主模型。
+- 桌面端会从后端读取模型配置；DeepSeek 会优先通过 `${API_BASE:-https://api.deepseek.com}/models` 动态拉取模型列表，成功时直接使用接口返回的模型 id，失败时只回退到 `MODEL_OPTIONS`。`REASONING_EFFORT=off|low|medium|high|max` 可设置默认思考程度。DeepSeek 模型会额外按官方 thinking 参数处理：`off` 显式关闭 thinking，`low/medium` 映射为 `high`，`xhigh/max` 映射为 `max`。
+- 阶段 2 已将 `run_command` 切换到 macOS 原生沙箱执行，并增加 prefix exec policy、风险拦截、session allow 和工具元信息。
 - macOS 沙箱当前使用 `sandbox-exec`/Seatbelt：命令在真实项目目录执行，默认禁止网络，并按 `FileSystemPolicy` 生成可读/可写根目录。
+- Workspace protocol 已支持 `open_workspace`、`change_directory` 和 `add_dir`；额外目录必须显式加入，Python runtime 会刷新后续工具执行的 filesystem policy。
+- 项目本地策略配置使用 trust gate：默认 `session_only` 不读取 `.codex-mini/config.toml`；只有用户侧 trust store 标记为 trusted 的项目才会读取受白名单约束的 permission / exec policy 配置。
+- 恢复历史会话只接受当前 v2 workspace 快照：`selected_root`、`project_root`、`current_dir`、`additional_roots` 必须齐全且可重新验证；旧 `root` / `allowed_roots` 数据或失效路径会返回 `workspace_error`，不做静默修复。
+- 旧本地会话数据不迁移；需要清理时显式运行 `make clean-sessions` 删除 `.codex-mini/sessions/`。
+- 模型上下文会按 `project_root -> current_dir` 分层加载 `AGENTS.md`；如果当前目录在外部 additional root 内，不会越过原项目根去加载外部项目说明。
 - 如果当前进程本身已经处在受限沙箱里，`sandbox-exec` 可能返回 `sandbox_apply: Operation not permitted`；正常终端/桌面应用运行环境下再做端到端验证。
 - 会话运行态会写入 `.codex-mini/sessions/`：`index.sqlite` 保存会话索引，`transcripts/*.jsonl` 保存 append-only 事件流。
 - 会话标题根据首条用户提问调用模型生成，并在返回前清理与截断。

@@ -63,6 +63,12 @@ class WebSocketRequestDispatcher:
         if packet_type == "open_workspace":
             await self._handle_open_workspace(packet)
             return True
+        if packet_type == "change_directory":
+            await self._handle_change_directory(packet)
+            return True
+        if packet_type == "add_dir":
+            await self._handle_add_dir(packet)
+            return True
         if packet_type == "new_session":
             await self._handle_new_session(packet)
             return True
@@ -133,6 +139,104 @@ class WebSocketRequestDispatcher:
                 session_state=self.context.session_state.as_dict(),
                 tools=self.context.registry.metadata(),
             )
+        )
+
+    async def _handle_change_directory(self, packet: Dict[str, Any]) -> None:
+        """切换当前执行目录；不会创建新 session，也不会自动扩大权限。"""
+
+        request_id = _request_id(packet)
+        requested_path = str(packet.get("path") or "").strip()
+        if not requested_path:
+            await self._send_error(
+                packet,
+                request_id=request_id,
+                message="directory path is empty",
+            )
+            return
+
+        try:
+            previous_workspace = self.context.change_directory(requested_path)
+        except WorkspaceValidationError as exc:
+            await self._record_runtime_error(
+                packet,
+                request_id=request_id,
+                message=str(exc),
+                requested_path=requested_path,
+            )
+            await self.ws.send_json(
+                build_event(
+                    "workspace_error",
+                    self.context.session_id,
+                    _turn_id(packet),
+                    request_id=request_id,
+                    message=str(exc),
+                    requested_path=requested_path,
+                    workspace=self.context.workspace.as_dict(),
+                )
+            )
+            return
+
+        await self._send_workspace_policy_changed(
+            packet,
+            request_id=request_id,
+            previous_workspace=previous_workspace,
+            reason="change_directory",
+            current_dir=self.context.workspace.current_dir.as_posix(),
+        )
+
+    async def _handle_add_dir(self, packet: Dict[str, Any]) -> None:
+        """显式加入 additional root；读写权限由客户端 packet 明确表达。"""
+
+        request_id = _request_id(packet)
+        requested_path = str(packet.get("path") or "").strip()
+        access = str(packet.get("access") or "").strip()
+        if not requested_path:
+            await self._send_error(
+                packet,
+                request_id=request_id,
+                message="additional directory path is empty",
+            )
+            return
+        if access not in ("read", "write"):
+            await self._send_error(
+                packet,
+                request_id=request_id,
+                message="additional directory access must be read or write",
+                requested_path=requested_path,
+            )
+            return
+
+        try:
+            previous_workspace, added_root = self.context.add_workspace_directory(
+                requested_path,
+                access,
+            )
+        except WorkspaceValidationError as exc:
+            await self._record_runtime_error(
+                packet,
+                request_id=request_id,
+                message=str(exc),
+                requested_path=requested_path,
+            )
+            await self.ws.send_json(
+                build_event(
+                    "workspace_error",
+                    self.context.session_id,
+                    _turn_id(packet),
+                    request_id=request_id,
+                    message=str(exc),
+                    requested_path=requested_path,
+                    workspace=self.context.workspace.as_dict(),
+                )
+            )
+            return
+
+        await self._send_workspace_policy_changed(
+            packet,
+            request_id=request_id,
+            previous_workspace=previous_workspace,
+            reason="add_dir",
+            added_root=added_root,
         )
 
     async def _handle_new_session(self, packet: Dict[str, Any]) -> None:
@@ -246,18 +350,36 @@ class WebSocketRequestDispatcher:
     async def _handle_resume_session(self, packet: Dict[str, Any]) -> None:
         """恢复磁盘会话，或在未指定 session_id 时解除当前会话挂起状态。"""
 
+        request_id = _request_id(packet)
         previous_state = self.context.session_state.as_dict()
         target_session_id = str(packet.get("session_id") or "").strip()
         if target_session_id:
             try:
-                display_messages, session_summary = self.context.resume_session_from_disk(
-                    target_session_id
-                )
+                display_messages, session_summary = self.context.resume_session_from_disk(target_session_id)
             except KeyError:
                 await self._send_error(
                     packet,
                     message=f"unknown session: {target_session_id}",
                     requested_session_id=target_session_id,
+                )
+                return
+            except WorkspaceValidationError as exc:
+                await self._record_runtime_error(
+                    packet,
+                    request_id=request_id,
+                    message=str(exc),
+                    requested_session_id=target_session_id,
+                )
+                await self.ws.send_json(
+                    build_event(
+                        "workspace_error",
+                        self.context.session_id,
+                        _turn_id(packet),
+                        request_id=request_id,
+                        message=str(exc),
+                        requested_session_id=target_session_id,
+                        workspace=self.context.workspace.as_dict(),
+                    )
                 )
                 return
 
@@ -280,10 +402,12 @@ class WebSocketRequestDispatcher:
                 "session_resumed",
                 {
                     "turn_id": _turn_id(packet),
+                    "request_id": request_id,
                     "previous_state": previous_state,
                     "session_state": self.context.session_state.as_dict(),
                     "resumed_from_disk": resumed_from_disk,
                     "message_count": len(self.context.messages),
+                    "workspace": self.context.workspace.as_dict(),
                 },
             )
         await self.ws.send_json(
@@ -291,6 +415,7 @@ class WebSocketRequestDispatcher:
                 "session_resumed",
                 self.context.session_id,
                 _turn_id(packet),
+                request_id=request_id,
                 previous_state=previous_state,
                 session_state=self.context.session_state.as_dict(),
                 resumed_from_disk=resumed_from_disk,
@@ -349,6 +474,44 @@ class WebSocketRequestDispatcher:
                     "model": title_model,
                 },
             )
+
+    async def _send_workspace_policy_changed(
+        self,
+        packet: Dict[str, Any],
+        *,
+        request_id: str,
+        previous_workspace: Dict[str, Any],
+        reason: str,
+        **payload: Any,
+    ) -> None:
+        """发送 workspace policy 更新事件，并按需写入 transcript。"""
+
+        event_payload = {
+            "request_id": request_id,
+            "previous_workspace": previous_workspace,
+            "workspace": self.context.workspace.as_dict(),
+            "session_state": self.context.session_state.as_dict(),
+            "reason": reason,
+            **payload,
+        }
+        if self.context.session_persisted:
+            record_transcript_event(
+                self.context.session_store,
+                self.context.session_id,
+                "workspace_policy_changed",
+                {
+                    "turn_id": _turn_id(packet),
+                    **event_payload,
+                },
+            )
+        await self.ws.send_json(
+            build_event(
+                "workspace_policy_changed",
+                self.context.session_id,
+                _turn_id(packet),
+                **event_payload,
+            )
+        )
 
     async def _send_error(
         self,

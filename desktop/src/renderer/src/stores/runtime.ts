@@ -26,11 +26,7 @@ const WORKSPACE_SESSIONS_STORAGE_KEY = 'codex-mini.workspace-sessions'
 const CONVERSATION_WORKSPACES_STORAGE_KEY = 'codex-mini.conversation-workspaces'
 const MAX_WORKSPACE_PROJECTS = 20
 const MAX_CONVERSATION_WORKSPACES = 12
-const FALLBACK_MODEL_OPTIONS = [
-  'openai/gpt-4o-mini',
-  'deepseek/deepseek-chat',
-  'deepseek/deepseek-reasoner'
-]
+const FALLBACK_MODEL_OPTIONS = ['gpt-4o-mini']
 const FALLBACK_REASONING_OPTIONS: RuntimeReasoningEffort[] = ['off', 'low', 'medium', 'high', 'max']
 
 let runtimeSocket: RuntimeSocket | null = null
@@ -154,6 +150,18 @@ function normalizeSelectedRoot(root: string): string {
   return root.replace(/[\\/]+$/, '')
 }
 
+function formatWorkspacePath(workspace: RuntimeWorkspace, path: string): string {
+  const normalizedRoot = normalizeSelectedRoot(workspace.selected_root)
+  const normalizedPath = normalizeSelectedRoot(path)
+  if (normalizedPath === normalizedRoot) return '.'
+
+  const slashRoot = `${normalizedRoot}/`
+  if (normalizedPath.startsWith(slashRoot)) {
+    return normalizedPath.slice(slashRoot.length)
+  }
+  return normalizedPath
+}
+
 function isDefaultConversationSelectedRoot(root: string): boolean {
   return /[\\/]Documents[\\/]Codex[\\/]\d{4}-\d{2}-\d{2}[\\/]new-chat$/.test(
     normalizeSelectedRoot(root)
@@ -164,7 +172,7 @@ function normalizeModelOption(value: unknown): string | null {
   if (typeof value !== 'string') return null
 
   const model = value.trim()
-  if (!model || model.length > 160 || /\s/.test(model) || !model.includes('/')) return null
+  if (!model || model.length > 160 || /\s/.test(model)) return null
   return model
 }
 
@@ -173,7 +181,17 @@ function uniqueModelOptions(values: unknown[], fallback = FALLBACK_MODEL_OPTIONS
     .map((value) => normalizeModelOption(value))
     .filter((value): value is string => Boolean(value))
 
-  return Array.from(new Set([...options, ...fallback]))
+  if (options.length > 0) {
+    return Array.from(new Set(options))
+  }
+
+  return Array.from(
+    new Set(
+      fallback
+        .map((value) => normalizeModelOption(value))
+        .filter((value): value is string => Boolean(value))
+    )
+  )
 }
 
 function normalizeReasoningEffort(value: unknown): RuntimeReasoningEffort | null {
@@ -248,7 +266,7 @@ function loadWorkspaceSessionCache(): Record<string, RuntimeSessionSummary[]> {
         .filter(([root, sessions]) => typeof root === 'string' && Array.isArray(sessions))
         .map(([root, sessions]) => [
           normalizeSelectedRoot(root),
-          (sessions as unknown[]).filter(isSessionSummary).slice(0, 50)
+          mergeSessionSummaries([], (sessions as unknown[]).filter(isSessionSummary)).slice(0, 50)
         ])
     )
   } catch {
@@ -277,9 +295,7 @@ function isAdditionalRoot(value: unknown): value is RuntimeAdditionalRoot {
   return (
     typeof candidate.path === 'string' &&
     (candidate.access === 'read' || candidate.access === 'write') &&
-    (candidate.source === 'user' ||
-      candidate.source === 'session' ||
-      candidate.source === 'config')
+    (candidate.source === 'user' || candidate.source === 'session' || candidate.source === 'config')
   )
 }
 
@@ -311,6 +327,22 @@ function isSessionSummary(value: unknown): value is RuntimeSessionSummary {
     typeof candidate.message_count === 'number' &&
     typeof candidate.last_message === 'string'
   )
+}
+
+function mergeSessionSummaries(
+  current: RuntimeSessionSummary[] = [],
+  incoming: RuntimeSessionSummary[] = []
+): RuntimeSessionSummary[] {
+  const bySessionId = new Map<string, RuntimeSessionSummary>()
+  const sessions = [...current, ...incoming]
+  sessions.forEach((session) => {
+    const existing = bySessionId.get(session.session_id)
+    if (!existing || session.updated_at >= existing.updated_at) {
+      bySessionId.set(session.session_id, session)
+    }
+  })
+
+  return Array.from(bySessionId.values()).sort((left, right) => right.updated_at - left.updated_at)
 }
 
 export const useRuntimeStore = defineStore('runtime', {
@@ -492,6 +524,76 @@ export const useRuntimeStore = defineStore('runtime', {
       this.persistWorkspaceProjects()
     },
 
+    reconcileSelectedRootAlias(aliasRoot?: string | null, canonicalRoot?: string | null): void {
+      const alias = aliasRoot ? normalizeSelectedRoot(aliasRoot) : ''
+      const canonical = canonicalRoot ? normalizeSelectedRoot(canonicalRoot) : ''
+      if (!alias || !canonical || alias === canonical) return
+
+      const aliasSessions = this.sessionsBySelectedRoot[alias] || []
+      const canonicalSessions = this.sessionsBySelectedRoot[canonical] || []
+      const remainingSessions = { ...this.sessionsBySelectedRoot }
+      delete remainingSessions[alias]
+      this.sessionsBySelectedRoot = {
+        ...remainingSessions,
+        [canonical]: mergeSessionSummaries(canonicalSessions, aliasSessions)
+      }
+
+      const isConversationAlias =
+        this.conversationSelectedRoots.some((item) => {
+          const normalizedItem = normalizeSelectedRoot(item)
+          return normalizedItem === alias || normalizedItem === canonical
+        }) ||
+        this.pendingConversationSelectedRoot === alias ||
+        isDefaultConversationSelectedRoot(alias) ||
+        isDefaultConversationSelectedRoot(canonical)
+
+      if (isConversationAlias) {
+        this.conversationSelectedRoots = [
+          canonical,
+          ...this.conversationSelectedRoots.filter((item) => {
+            const normalizedItem = normalizeSelectedRoot(item)
+            return normalizedItem !== alias && normalizedItem !== canonical
+          })
+        ].slice(0, MAX_CONVERSATION_WORKSPACES)
+      }
+
+      this.workspaceProjects = this.workspaceProjects
+        .map((project) =>
+          normalizeSelectedRoot(project.selected_root) === alias
+            ? { ...project, selected_root: canonical }
+            : project
+        )
+        .filter((project, index, projects) => {
+          const selectedRoot = normalizeSelectedRoot(project.selected_root)
+          return (
+            projects.findIndex(
+              (item) => normalizeSelectedRoot(item.selected_root) === selectedRoot
+            ) === index
+          )
+        })
+
+      if (this.pendingConversationSelectedRoot === alias) {
+        this.pendingConversationSelectedRoot = canonical
+      }
+      if (this.pendingWorkspaceResume?.selected_root === alias) {
+        this.pendingWorkspaceResume = {
+          ...this.pendingWorkspaceResume,
+          selected_root: canonical
+        }
+      }
+
+      this.persistConversationWorkspaces()
+      this.persistWorkspaceProjects()
+      try {
+        window.localStorage.setItem(
+          WORKSPACE_SESSIONS_STORAGE_KEY,
+          JSON.stringify(this.sessionsBySelectedRoot)
+        )
+      } catch {
+        // Session summaries are refreshed from the Python runtime when available.
+      }
+    },
+
     rememberWorkspace(workspace?: RuntimeWorkspace | null): void {
       if (!workspace) return
 
@@ -519,7 +621,7 @@ export const useRuntimeStore = defineStore('runtime', {
 
       this.sessionsBySelectedRoot = {
         ...this.sessionsBySelectedRoot,
-        [normalizedRoot]: sessions
+        [normalizedRoot]: mergeSessionSummaries([], sessions)
       }
 
       try {
@@ -541,7 +643,10 @@ export const useRuntimeStore = defineStore('runtime', {
         ...this.sessionsBySelectedRoot,
         [normalizedRoot]: cachedSessions.filter((session) => session.session_id !== sessionId)
       }
-      if (this.workspace?.selected_root && normalizeSelectedRoot(this.workspace.selected_root) === normalizedRoot) {
+      if (
+        this.workspace?.selected_root &&
+        normalizeSelectedRoot(this.workspace.selected_root) === normalizedRoot
+      ) {
         this.sessionHistory = this.sessionHistory.filter(
           (session) => session.session_id !== sessionId
         )
@@ -603,8 +708,8 @@ export const useRuntimeStore = defineStore('runtime', {
       })
     },
 
-    approvePermission(): void {
-      this.sendPermissionDecision(true)
+    approvePermission(scope: 'once' | 'session' = 'once'): void {
+      this.sendPermissionDecision(true, undefined, scope)
     },
 
     denyPermission(feedback?: string): void {
@@ -673,7 +778,10 @@ export const useRuntimeStore = defineStore('runtime', {
 
     async startNewConversationInWorkspace(path: string): Promise<void> {
       const root = normalizeSelectedRoot(path)
-      if (this.workspace?.selected_root && normalizeSelectedRoot(this.workspace.selected_root) === root) {
+      if (
+        this.workspace?.selected_root &&
+        normalizeSelectedRoot(this.workspace.selected_root) === root
+      ) {
         await this.startNewConversation()
         return
       }
@@ -690,7 +798,10 @@ export const useRuntimeStore = defineStore('runtime', {
 
     async resumeSessionInWorkspace(path: string, sessionId: string): Promise<void> {
       const root = normalizeSelectedRoot(path)
-      if (this.workspace?.selected_root && normalizeSelectedRoot(this.workspace.selected_root) === root) {
+      if (
+        this.workspace?.selected_root &&
+        normalizeSelectedRoot(this.workspace.selected_root) === root
+      ) {
         await this.resumeSession(sessionId)
         return
       }
@@ -718,14 +829,69 @@ export const useRuntimeStore = defineStore('runtime', {
       })
     },
 
-    sendPermissionDecision(approved: boolean, feedback?: string): void {
+    async changeDirectory(path: string): Promise<void> {
+      const target = path.trim()
+      if (!target) return
+
+      if (!runtimeSocket?.isOpen) {
+        await this.connect({ silent: true })
+      }
+
+      if (!runtimeSocket?.isOpen) {
+        this.errorMessage = '后端还没有连接，无法切换当前目录。'
+        return
+      }
+
+      runtimeSocket.send({
+        type: 'change_directory',
+        request_id: `change-directory-${Date.now()}`,
+        path: target
+      })
+    },
+
+    async addWorkspaceDirectory(path: string, access: 'read' | 'write'): Promise<void> {
+      const target = path.trim()
+      if (!target) return
+
+      if (!runtimeSocket?.isOpen) {
+        await this.connect({ silent: true })
+      }
+
+      if (!runtimeSocket?.isOpen) {
+        this.errorMessage = '后端还没有连接，无法加入额外目录。'
+        return
+      }
+
+      runtimeSocket.send({
+        type: 'add_dir',
+        request_id: `add-dir-${Date.now()}`,
+        path: target,
+        access
+      })
+    },
+
+    sendPermissionDecision(
+      approved: boolean,
+      feedback?: string,
+      scope: 'once' | 'session' = 'once'
+    ): void {
       if (!this.activePermission || !runtimeSocket?.isOpen) return
+
+      const suggestedPrefix = this.activePermission.metadata.suggested_prefix_rule
+      const prefixRule =
+        scope === 'session' &&
+        Array.isArray(suggestedPrefix) &&
+        suggestedPrefix.every((item) => typeof item === 'string' && item.trim())
+          ? suggestedPrefix.map((item) => item.trim())
+          : undefined
 
       runtimeSocket.send({
         type: 'permission_decision',
         request_id: this.activePermission.request_id,
         approved,
-        feedback
+        feedback,
+        scope,
+        prefix_rule: prefixRule
       })
     },
 
@@ -783,6 +949,10 @@ export const useRuntimeStore = defineStore('runtime', {
           this.selectedSessionId = event.session_id
           this.sessionState = event.session_state
           this.workspace = event.workspace
+          this.reconcileSelectedRootAlias(
+            this.pendingWorkspaceResume?.selected_root || this.pendingConversationSelectedRoot,
+            event.workspace.selected_root
+          )
           this.rememberWorkspace(event.workspace)
           this.tools = event.tools
           this.activeTurnId = ''
@@ -794,14 +964,32 @@ export const useRuntimeStore = defineStore('runtime', {
           chat.addSystemMessage(`已打开工作区：${event.workspace.display_name}`)
           this.requestSessions()
           if (
-            this.pendingConversationSelectedRoot === normalizeSelectedRoot(event.workspace.selected_root)
+            this.pendingConversationSelectedRoot ===
+            normalizeSelectedRoot(event.workspace.selected_root)
           ) {
             this.pendingConversationSelectedRoot = null
           }
-          if (this.pendingWorkspaceResume?.selected_root === normalizeSelectedRoot(event.workspace.selected_root)) {
+          if (
+            this.pendingWorkspaceResume?.selected_root ===
+            normalizeSelectedRoot(event.workspace.selected_root)
+          ) {
             const sessionId = this.pendingWorkspaceResume.sessionId
             this.pendingWorkspaceResume = null
             void this.resumeSession(sessionId)
+          }
+          break
+        case 'workspace_policy_changed':
+          this.sessionState = event.session_state
+          this.workspace = event.workspace
+          this.rememberWorkspace(event.workspace)
+          if (event.reason === 'change_directory') {
+            chat.addSystemMessage(
+              `当前目录已切换：${formatWorkspacePath(event.workspace, event.workspace.current_dir)}`
+            )
+          } else if (event.reason === 'add_dir' && event.added_root) {
+            chat.addSystemMessage(
+              `已加入额外目录：${event.added_root.access === 'write' ? '可写' : '只读'} ${event.added_root.path}`
+            )
           }
           break
         case 'turn_started':
@@ -829,7 +1017,9 @@ export const useRuntimeStore = defineStore('runtime', {
           if (
             !event.workspace?.selected_root ||
             normalizeSelectedRoot(event.workspace.selected_root) ===
-              (this.workspace?.selected_root ? normalizeSelectedRoot(this.workspace.selected_root) : '')
+              (this.workspace?.selected_root
+                ? normalizeSelectedRoot(this.workspace.selected_root)
+                : '')
           ) {
             this.sessionHistory = event.sessions
           }
@@ -845,7 +1035,9 @@ export const useRuntimeStore = defineStore('runtime', {
             this.cacheWorkspaceSessions(event.workspace.selected_root, event.sessions)
             if (
               normalizeSelectedRoot(event.workspace.selected_root) ===
-              (this.workspace?.selected_root ? normalizeSelectedRoot(this.workspace.selected_root) : '')
+              (this.workspace?.selected_root
+                ? normalizeSelectedRoot(this.workspace.selected_root)
+                : '')
             ) {
               this.sessionHistory = event.sessions
             }
@@ -930,6 +1122,14 @@ export const useRuntimeStore = defineStore('runtime', {
             this.selectedSessionId = event.session_id
           }
           this.sessionState = event.session_state
+          if (event.workspace) {
+            this.reconcileSelectedRootAlias(
+              this.pendingWorkspaceResume?.selected_root || this.pendingConversationSelectedRoot,
+              event.workspace.selected_root
+            )
+            this.workspace = event.workspace
+            this.rememberWorkspace(event.workspace)
+          }
           this.activeClarification = null
           if (event.resumed_from_disk) {
             chat.loadConversation(event.messages || [], event.session?.title || '历史会话')

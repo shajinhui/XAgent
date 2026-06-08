@@ -17,7 +17,7 @@ Codex-mini 是一个 Python 版 Codex 类本地 Agent 学习项目，目前正�
 - 会话持久化已有第一版：`.codex-mini/sessions/index.sqlite` 作为索引，`transcripts/*.jsonl` 作为 append-only 事件流。
 - workspace 后端骨架已有第一版：验证用户选择的工作区目录，并在 `open_workspace` 时重建 session store、tool registry 和 workspace payload。
 - `run_command.cwd` 已有第一版：命令可以在 workspace 内部子目录执行，但 cwd 不会扩大 sandbox 写入边界。
-- workspace/permission 专题架构已有目标文档，且 `WorkspaceContext v2`、统一 filesystem policy、network policy 和 policy-driven Seatbelt 第一片已落地：`selected_root`、`project_root`、`current_dir`、session-only trust、additional root model、workspace snapshot、`FileSystemPolicy`、`PermissionProfile`、`ApprovalPolicy` 和 `NetworkPolicy` 已进入代码；后续还要继续落 richer exec policy。
+- workspace/permission 专题架构已有目标文档，且 `WorkspaceContext v2`、统一 filesystem policy、network policy、policy-driven Seatbelt、prefix exec policy 和 trust-gated project config 第一片已落地：`selected_root`、`project_root`、`current_dir`、session-only/trusted trust model、additional root model、workspace snapshot、`FileSystemPolicy`、`PermissionProfile`、`ApprovalPolicy`、`NetworkPolicy` 和 `ExecPolicy` 已进入代码。
 - `server/` 已从单体 WebSocket 文件开始拆分：`protocol/` 负责事件协议，`runtime/` 负责模型请求、streaming 和 session 状态，`processors/` 负责业务处理器，`views/` 负责给客户端展示的投影数据。
 - 桌面客户端已经进入 Electron/Vue 本地 runtime client 方向，负责聊天、审批、Markdown 渲染、历史会话、工作区打开和会话操作。
 - 已建立基础 `unittest` 测试，覆盖安全策略、工具注册表、WebSocket 事件、会话存储和恢复。
@@ -35,18 +35,21 @@ workspace/permission 已经开始 v2 落地，目前完成了 workspace 身份�
 - `workspace/models.py` 已经拆出 `selected_root`、`project_root`、`current_dir`、`WorkspaceTrust`、`WorkspaceSnapshot` 和 `AdditionalRoot`。
 - workspace payload 只发 `selected_root`、`project_root`、`current_dir`、`trust`、`additional_roots` 等 v2 字段；不再发旧 `root` / `allowed_roots` 字段。
 - `project_root` 已可在打开 Git repo 子目录时指向 canonical git root，`selected_root` 保持用户实际选择目录。
-- `current_dir` 仍默认等于 `selected_root`，还没有 `change_directory` 协议。
+- `current_dir` 默认等于 `selected_root`，并可通过 `change_directory` 在已授权目录内切换；该操作不创建新 session。
 - `security/permissions.py` 已提供 `FileSystemPolicy`、`PermissionProfile`、`ApprovalPolicy` 和 `NetworkPolicy`。
 - `read_file`、`write_file`、`edit_file`、`grep` 和 `run_command.cwd` 已通过 `SecurityPolicy` 走 `current_dir + filesystem policy` 解析。
 - `.env` 默认禁止 read/write；`.git`、`.codex-mini`、`.venv`、`__pycache__` 默认禁止 write。
-- `additional_roots` 已有模型，并能在 `FileSystemPolicy` 和 Seatbelt profile 中表达 read/write 根；但还没有 desktop/UI 协议来添加它们。
-- 命令策略仍在 `SecurityPolicy.check_command()` 里，尚未拆出 richer `ExecPolicy` rule 文件或 prefix/session allowlist。
+- `additional_roots` 已有模型，并可通过 `add_dir` 从 desktop protocol 显式加入 read/write 根；`FileSystemPolicy` 与 Seatbelt profile 会立即继承这些根。
+- `resume_session` 只接受当前 v2 workspace snapshot：从 session metadata 和最后一次 `workspace_policy_changed` 事件取 `selected_root`、`project_root`、`current_dir`、`additional_roots`，缺失字段、旧字段或失效路径都会返回 `workspace_error`。
+- `workspace/instructions.py` 会从 `project_root` 到 `current_dir` 分层加载 `AGENTS.md`，且不会越过项目根去读取 external additional root 的项目文档。
+- 命令策略已拆到 `security/exec_policy.py`，支持 prefix allow/ask/deny、session allow、危险命令拒绝和 prefix suggestion。
+- `workspace/trust.py` 与 `workspace/project_config.py` 已提供第一版 trust gate：默认 `session_only` 不加载 `.codex-mini/config.toml`，trusted project 才能加载白名单 permission / exec policy 配置，敏感字段和过宽 allow rule 会被拒绝。
 - `sandbox/macos_executor.py` 已按 filesystem/network policy 生成第一版 Seatbelt profile，不再使用全局 `allow file-read*`。
 
 因此后续讨论时应区分两句话：
 
 - “项目模块架构已经更新”是已完成事实。
-- “workspace/permission v2 完整实现”不是当前事实，目前完成了 PR1、PR2 和 PR3 第一版，还差 richer exec policy、desktop additional roots、resume 验证和更细 sandbox 回归。
+- “workspace/permission v2 完整实现”不是当前事实，目前完成了 PR1、PR2、PR3、PR4、PR5、PR6 和 PR7 第一片，还差 trust UI、project-local policy 持久化/编辑、session allowlist 恢复边界和更细 sandbox 回归。
 
 ## 顶层目录结构
 
@@ -188,7 +191,7 @@ CLI 版 Agent 主循环。
 主要职责：
 
 - 加载 `.env`。
-- 根据 `MODEL_PROVIDER` 和 `MODEL_NAME` 组装 LiteLLM 模型名。
+- 根据 `MODEL_NAME` 读取主模型 id，`MODEL_PROVIDER` 仅用于服务商相关行为（例如 DeepSeek `/models` 拉取和 thinking 参数判断）。
 - 构建 LangGraph 状态机。
 - 把 core registry 的 `schemas()` 暴露给模型。
 - 当模型发起 tool call 时，通过 `ToolRouter` 解析，并由 `ToolRunner` 执行工具。
@@ -391,11 +394,11 @@ append-only JSONL transcript 读写器。
 
 当前状态：
 
-- 先通过 `SecurityPolicy.check_command()` 做危险命令和白名单检查。
-- 非白名单但未命中危险规则的命令会返回 `ask` 权限 metadata。
+- 先通过 `SecurityPolicy.check_command()` 委托 `ExecPolicy` 做危险命令、prefix rule 和 known safe command 检查。
+- 需要用户确认的命令会返回 `ask` 权限 metadata，可携带 `suggested_prefix_rule`。
 - 被拒绝时记录到 `CircuitBreaker`。
 - 连续拒绝达到阈值时，在错误文本和 metadata 中提示会话挂起。
-- 即使命中白名单，`run_command` 也需要用户确认后才会进入 macOS 沙箱执行。
+- 即使命中 known safe command，`run_command` 默认也需要用户确认后才会进入 macOS 沙箱执行；session allow prefix 可跳过后续同类确认。
 - 允许执行时交给 `SecureMacOSSandboxExecutor.run()`。
 - 工具 schema 中的 `timeout` 已传给 macOS sandbox executor。
 - 工具 schema 支持可选 `cwd`，会通过 `SecurityPolicy.resolve_command_cwd()` 限制在 active workspace 内部，并拒绝文件、越界路径和受保护目录。
@@ -403,7 +406,7 @@ append-only JSONL transcript 读写器。
 注意事项：
 
 - 权限确认和 approved retry 已在 WebSocket 主路径接入。
-- 命令策略仍是硬编码，后续需要配置化。
+- 项目级命令策略配置已有 trust-gated project config 第一片，后续需要补运行时批准规则持久化和策略编辑入口。
 
 ### `tools/network/web_fetch.py`
 
@@ -449,12 +452,12 @@ workspace filesystem 和 permission 基础模型。
 - 相对路径默认以 `current_dir` 为基准。
 - `.env` 默认禁止读取和写入。
 - `.git`、`.codex-mini`、`.venv`、`__pycache__` 默认禁止写入。
-- additional roots 可表达 read-only 或 writable，但当前还没有 UI/协议入口。
+- additional roots 可表达 read-only 或 writable，并已通过 `add_dir` 接入 WebSocket/desktop 第一版。
 
 当前不足：
 
-- 还没有 glob rule、project-local config rule 或策略文件加载。
-- additional roots 没有写入 session/workspace 协议。
+- 已有 trust-gated project-local permission / exec policy config 第一片，但还没有 glob rule、策略编辑 UI 或完整持久化体验。
+- additional roots 已写入 workspace payload，并会在 session resume 时严格重新验证；丢失或失效目录会让恢复失败并返回 `workspace_error`，不做 warning 式修复。
 - `danger_no_sandbox` 只是预留 profile，不应在当前产品主路径启用。
 
 ### `security/policy.py`
@@ -467,43 +470,30 @@ workspace filesystem 和 permission 基础模型。
 - `resolve_read_path()`：解析路径并检查 read policy。
 - `resolve_write_path()` / `ensure_writable_path()`：解析路径并检查 write policy。
 - `resolve_command_cwd()`：用 filesystem policy 检查命令 cwd，cwd 不扩大权限。
-- `check_command()`：命令安全检查。
+- `check_command()`：委托 `ExecPolicy` 做命令安全检查。
 - `check_command()` 输出 `allow/deny/ask` 决策。
-- 危险模式拦截，包括：
-  - `rm -rf /`
-  - fork bomb
-  - `mkfs`
-  - `dd if=`
-  - `shutdown`
-  - `reboot`
-  - `curl | sh`
-  - `wget | sh`
-- 静态命令白名单，包括：
-  - `ls`
-  - `pwd`
-  - `cat`
-  - `head`
-  - `tail`
-  - `echo`
-  - `rg`
-  - `grep`
-  - `find`
-  - `python`
-  - `python3`
-  - `pytest`
-  - `pip`
-  - `npm`
-  - `node`
-  - `git`
-  - `make`
+
+### `security/exec_policy.py`
+
+prefix exec policy 和命令启发式。
+
+当前能力：
+
+- `ExecPolicyRule` 支持 prefix allow/ask/deny。
+- `ExecPolicy.with_session_allow()` 可构建本会话允许规则。
+- 危险命令直接 deny，包括 `rm -rf /`、fork bomb、`mkfs`、`dd if=`、`shutdown`、`reboot`、`curl | sh`、`wget | sh`、`sudo`、`chmod -R 777`。
+- permission metadata 可携带 `suggested_prefix_rule`，例如 `["ruff", "check"]`、`["npm", "run", "test"]`。
+- `python -c`、shell wrapper、`node -e`、destructive 命令不会建议持久 prefix rule。
+- `ApprovalPolicy.NEVER` 下需要 ask 的命令会降级为 deny。
+- WebSocket `permission_decision` 支持 `scope=session` 与 `prefix_rule`，批准后把匹配的 suggested prefix 加入当前会话 allow rules。
 
 当前不足：
 
-- 白名单还是硬编码。
-- 没有按工作模式区分 `default/confirm/auto_deny`。
-- 没有独立 allow/deny rule 配置文件。
-- 还没有独立 richer `ExecPolicy` 模型。
+- trusted project 可加载 project-local exec policy 配置文件第一片。
+- 还没有把运行时批准产生的 prefix rules 持久化到 trusted project/user config。
+- known safe commands 仍是内置集合，还没有按工作模式区分。
 - shell 命令对受保护路径的检测还是基于命令文本，尚不能替代完整系统级文件访问控制。
+- shell command segment 解析仍是第一版启发式，不是完整 shell AST。
 
 ### `security/circuit_breaker.py`
 
@@ -572,7 +562,7 @@ macOS 原生命令沙箱执行器。
 
 当前职责：
 
-- `model_config.py` 统一模型名、低成本模型、`API_KEY`/`API_BASE`、reasoning effort 和 DeepSeek thinking 参数。
+- `model_config.py` 统一模型名、低成本模型、`API_KEY`/`API_BASE`、reasoning effort、DeepSeek `/models` 动态模型列表和 DeepSeek thinking 参数。
 - `model_stream.py` 负责 streaming delta 提取、tool call 增量拼接、assistant message 构造，以及历史 `reasoning_content` 清理。
 - `session_state.py` 负责 WebSocket 内存态 session、挂起/恢复状态，以及首条非空用户输入到来时的延迟持久化。
 - `websocket_context.py` 承载 WebSocket 连接内会反复变化的 workspace、session store、session id、session state、tool registry 和 messages。
@@ -622,16 +612,19 @@ FastAPI WebSocket transport 和请求分发入口。
 - 推送带 `schema_version` 的 `ready`，并携带工具元信息和 `session_state`。
 - `ready` 会携带当前 workspace 信息。
 - 支持 `open_workspace` 打开经过验证的目录；成功后会创建新的 session，并把 `SessionStore` 绑定到 `project_root`、把工具执行边界绑定到 `selected_root`。
+- 支持 `change_directory` 在已授权目录内切换当前执行目录；成功后推送 `workspace_policy_changed`，不创建新 session。
+- 支持 `add_dir` 显式加入 read/write additional root；成功后刷新工具 runner 的 filesystem policy，并保留会话级 exec policy。
 - 支持 `new_session` 创建新会话。
 - WebSocket 新会话先只存在于内存；只有第一条非空 `user_input` 到达时才写入 `.codex-mini/sessions/`，避免启动、切 workspace、点击新对话产生空 transcript。
 - 支持 `list_sessions` 返回历史会话摘要。
-- 支持带 `session_id` 的 `resume_session` 从磁盘恢复历史会话上下文和可展示消息。
+- 支持带 `session_id` 的 `resume_session` 从磁盘恢复历史会话上下文、可展示消息和重新验证后的 workspace policy。
 - 支持 `conversation_title_request`，当前标题生成策略为根据首条 user 消息调用低成本模型生成短标题，返回前清理与截断，来源标记为 `low-cost-first-user`。
 - DeepSeek 模型请求会按官方 thinking 参数兼容：`off` 显式发送 `thinking.disabled`，开启思考时发送 `thinking.enabled` 并把 `low/medium` 映射为 `high`、`xhigh/max` 映射为 `max`。
 - 每轮推送带 `session_id`、`turn_id`、`request_id`、`schema_version`、`timestamp` 的 `turn_started`。
 - 根据消息结果推送：
   - `session_created`
   - `workspace_changed`
+  - `workspace_policy_changed`
   - `workspace_error`
   - `sessions_list`
   - `tool_call_started`
@@ -652,7 +645,7 @@ FastAPI WebSocket transport 和请求分发入口。
 - 收到 `resume_session` 后，会清理 session 挂起状态和对应熔断计数。
 - WebSocket 路径已经用 LiteLLM `stream=True` 推送真实 `assistant_token`。
 - WebSocket 路径会把用户消息、assistant 消息、工具结果、权限决定、挂起/恢复和标题事件写入 transcript。
-- workspace 切换会写入 `workspace_opened` transcript 事件，并在新 workspace 下启动新的 session。
+- workspace 切换会写入 `workspace_opened` transcript 事件，并在新 workspace 下启动新的 session；workspace policy 变化会写入 `workspace_policy_changed` transcript 事件。
 - 协议封包、模型配置、streaming helper、turn runner、session state、标题生成和 session view 已下沉到 `server/protocol/`、`server/runtime/`、`server/processors/`、`server/views/`。
 - 控制类 WebSocket packet 已下沉到 `server/processors/request_dispatcher.py`，连接内可变状态由 `server/runtime/websocket_context.py` 承载。
 
@@ -674,10 +667,10 @@ Electron + Vue + TypeScript 本地客户端。
 - 通过 WebSocket 连接 Python runtime。
 - 展示聊天消息、assistant streaming、权限弹窗、工具结果和 session 状态。
 - 支持新建会话、恢复会话、历史会话列表和模型生成标题展示。
-- 支持通过 Electron 原生目录选择器打开工作区，并把用户选择的路径交给 Python runtime 验证与切换。
+- 支持通过 Electron 原生目录选择器打开工作区、切换当前目录、加入额外目录，并把用户选择的路径交给 Python runtime 验证与切换。
 - Markdown 渲染使用 `markdown-it` + `DOMPurify`，并保持工具结果 UI 与 assistant 正文分离。
 - 前端类型定义覆盖 runtime event 和 client packet。
-- 前端 runtime store 已能保存 `workspace` 状态，并发送 `open_workspace` packet；原生目录选择 UI 已接入 TitleBar 操作区。
+- 前端 runtime store 已能保存 `workspace` 状态，并发送 `open_workspace`、`change_directory`、`add_dir` packet；原生目录选择 UI 已接入 TitleBar 操作区。
 
 当前不足：
 
@@ -825,6 +818,7 @@ final_answer
 - `WorkspaceContext v2` 第一片：`selected_root`、`project_root`、`current_dir`、session-only trust、workspace snapshot 和 canonical workspace payload。
 - `FileSystemPolicy`、`PermissionProfile`、`ApprovalPolicy`、`NetworkPolicy` 第一版。
 - read/write/edit/grep/run_command cwd 统一走 `current_dir + filesystem policy`。
+- `change_directory`、`add_dir` 和 `workspace_policy_changed` 第一版。
 - `.env` read/write 保护和 `.codex-mini` write 保护。
 - 基于首条用户提问的 conversation title 生成。
 - Electron/Vue 桌面客户端基础壳和 runtime WebSocket 接入。
@@ -837,8 +831,8 @@ final_answer
 
 - `run_command` 已接 macOS 原生沙箱和 policy-driven Seatbelt 第一版，真实 workspace 改动会落盘，但策略细节还需完善。
 - WebSocket 事件和状态机主路径已建立，但还缺真实端到端集成测试、取消、背压和断线恢复。
-- workspace 当前完成后端协议闭环、Electron 原生目录选择入口、workspace 内 `run_command.cwd` 和 `selected_root/project_root/current_dir` 分离；但 `change_directory`、额外 additional roots 的真实权限语义和 resume 重新验证还没做。
-- 权限系统已有 `allow/deny/ask` 决策、统一 filesystem policy 和 policy-driven Seatbelt 第一版，但还不是完整可配置 exec 决策引擎。
+- workspace 当前完成后端协议闭环、Electron 原生目录选择入口、workspace 内 `run_command.cwd`、`change_directory`、`add_dir`、resume 重新验证、project instructions 分层加载和 `selected_root/project_root/current_dir` 分离。
+- 权限系统已有 `allow/deny/ask` 决策、统一 filesystem policy、prefix exec policy 和 policy-driven Seatbelt 第一版，但还不是完整可配置 project policy。
 - session transcript 可以恢复模型上下文，但运行控制状态、取消状态和更完整的 checkpoint/restore 还未产品化。
 - 桌面客户端已有 runtime shell，但还需要 smoke test、交互 polish 和错误状态收口。
 
@@ -848,9 +842,7 @@ final_answer
 - 配置化安全策略。
 - `edit_file` dry-run。
 - WebSocket 端到端集成测试。
-- 显式 `add-dir`/additional roots。
-- `WorkspaceContext v2` 后续：`change_directory`、workspace snapshot resume 验证、project instructions 分层加载和 additional roots 真实语义。
-- richer exec policy：prefix rules、rule 文件、session allowlist、dangerous prefix suggestion denylist。
+- `WorkspaceContext v2` 后续：trust UI、workspace policy 编辑和运行时 allowlist 持久化。
 - 桌面客户端 smoke test。
 - macOS 沙箱隔离回归测试。
 - cancellation/backpressure。
@@ -860,11 +852,9 @@ final_answer
 
 建议按以下顺序继续收口，优先把“本地 runtime + 桌面客户端”这条线打通：
 
-1. 补 richer exec policy。
-   - prefix allow/ask/deny rule、session allowlist 和 dangerous suggestion denylist。
-2. 补 workspace protocol 后续能力。
-   - 增加 `change_directory`、`add_dir`、workspace snapshot resume 重新验证和 `AGENTS.md` 分层加载。
-3. 继续收口桌面客户端壳。
-   - UI 展示 selected root、current dir、permission profile，并为 `change_directory`、`add_dir`、prefix approval 预留交互。
-4. 做集成测试和回归测试。
+1. 补 project trust 产品化闭环。
+   - trust/untrust 控制事件、桌面端状态展示、运行时 session allowlist 恢复边界和策略编辑入口。
+2. 继续收口桌面客户端壳。
+   - UI 已展示 selected root/current dir 并提供 `change_directory`、`add_dir` 入口；下一步补 permission profile 展示和更完整错误状态。
+3. 做集成测试和回归测试。
    - WebSocket workspace/permission tests、desktop smoke test、macOS sandbox policy tests。

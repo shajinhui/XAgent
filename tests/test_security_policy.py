@@ -150,6 +150,17 @@ class SecurityPolicyTests(unittest.TestCase):
             self.assertEqual(decision.action, "allow")
             self.assertTrue(decision.allowed)
 
+    def test_session_prefix_allow_skips_future_command_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = SecurityPolicy(Path(tmp))
+
+            policy.allow_prefix_for_session(("ruff", "check"))
+            decision = policy.check_command("ruff check .")
+
+            self.assertEqual(decision.action, "allow")
+            self.assertEqual(decision.category, "session_allow")
+            self.assertFalse(decision.approval_required)
+
     def test_check_command_denies_protected_path_reference(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             policy = SecurityPolicy(Path(tmp))

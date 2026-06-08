@@ -5,8 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from workspace import AdditionalRoot
+if TYPE_CHECKING:
+    from workspace.models import AdditionalRoot
 
 
 class PermissionProfile(StrEnum):

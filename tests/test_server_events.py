@@ -18,10 +18,13 @@ from server.protocol.events import EVENT_SCHEMA_VERSION, build_event, parse_clie
 from server.runtime.model_config import (
     build_api_kwargs,
     build_low_cost_model_name,
+    build_litellm_model_name,
     build_model_config_payload,
     build_model_name,
     build_model_options,
     build_model_request_config,
+    configure_litellm_environment,
+    fetch_provider_model_options,
 )
 from server.runtime.model_stream import (
     build_assistant_message,
@@ -58,6 +61,20 @@ class FakeWebSocket:
 
     async def receive_json(self):
         return self.incoming.pop(0)
+
+
+class FakeHTTPResponse:
+    def __init__(self, payload: bytes) -> None:
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def read(self) -> bytes:
+        return self.payload
 
 
 class ServerEventTests(unittest.TestCase):
@@ -295,23 +312,53 @@ class ServerEventTests(unittest.TestCase):
             self.assertEqual(summaries, [])
             load_events.assert_not_called()
 
-    def test_session_display_messages_excludes_tool_events(self) -> None:
+    def test_session_display_messages_restores_activity_trace(self) -> None:
         messages = session_display_messages(
             [
                 TranscriptEvent("event-1", "session-1", "user_message", 1.0, {"content": "你好"}),
                 TranscriptEvent(
                     "event-2",
                     "session-1",
-                    "tool_call_result",
-                    2.0,
-                    {"content": "工具输出"},
+                    "assistant_message",
+                    1.5,
+                    {
+                        "turn_id": "turn-1",
+                        "content": "",
+                        "tool_calls": [{"id": "call-1"}],
+                    },
                 ),
                 TranscriptEvent(
                     "event-3",
                     "session-1",
-                    "assistant_message",
+                    "tool_call_started",
+                    2.0,
+                    {
+                        "turn_id": "turn-1",
+                        "request_id": "call-1",
+                        "tool": "read_file",
+                        "arguments": '{"path": "README.md"}',
+                    },
+                ),
+                TranscriptEvent(
+                    "event-4",
+                    "session-1",
+                    "tool_call_result",
                     3.0,
-                    {"content": "你好，我可以帮你。"},
+                    {
+                        "turn_id": "turn-1",
+                        "request_id": "call-1",
+                        "tool": "read_file",
+                        "ok": True,
+                        "content": "文件内容",
+                        "metadata": {},
+                    },
+                ),
+                TranscriptEvent(
+                    "event-5",
+                    "session-1",
+                    "assistant_message",
+                    4.0,
+                    {"turn_id": "turn-1", "content": "**完成**"},
                 ),
             ]
         )
@@ -320,7 +367,34 @@ class ServerEventTests(unittest.TestCase):
             messages,
             [
                 {"role": "user", "content": "你好", "timestamp": 1.0},
-                {"role": "assistant", "content": "你好，我可以帮你。", "timestamp": 3.0},
+                {
+                    "role": "activity",
+                    "content": "已处理 1s",
+                    "collapsed": True,
+                    "activity_key": "turn:turn-1",
+                    "startedAt": 2000,
+                    "finishedAt": 3000,
+                    "timestamp": 2.0,
+                },
+                {
+                    "role": "activity_event",
+                    "content": "已读取 1 个文件",
+                    "activity_key": "turn:turn-1",
+                    "step": {
+                        "label": "已读取 1 个文件",
+                        "status": "success",
+                        "kind": "read",
+                        "requestId": "call-1",
+                        "detail": "文件内容",
+                    },
+                    "timestamp": 3.0,
+                },
+                {
+                    "role": "assistant",
+                    "content": "**完成**",
+                    "timestamp": 4.0,
+                    "activity_key": "turn:turn-1",
+                },
             ],
         )
 
@@ -502,9 +576,9 @@ class ServerEventTests(unittest.TestCase):
 
     def test_model_name_can_be_overridden_per_request(self) -> None:
         with patch.dict(os.environ, {"MODEL_PROVIDER": "deepseek", "MODEL_NAME": "deepseek-chat"}):
-            self.assertEqual(build_model_name(), "deepseek/deepseek-chat")
-            self.assertEqual(build_model_name("openai/gpt-4o-mini"), "openai/gpt-4o-mini")
-            self.assertEqual(build_model_name("bad value"), "deepseek/deepseek-chat")
+            self.assertEqual(build_model_name(), "deepseek-chat")
+            self.assertEqual(build_model_name("gpt-4o-mini"), "gpt-4o-mini")
+            self.assertEqual(build_model_name("bad value"), "deepseek-chat")
 
     def test_low_cost_model_defaults_to_main_model(self) -> None:
         with patch.dict(
@@ -514,7 +588,7 @@ class ServerEventTests(unittest.TestCase):
         ):
             os.environ.pop("LOW_COST_MODEL_PROVIDER", None)
             os.environ.pop("LOW_COST_MODEL_NAME", None)
-            self.assertEqual(build_low_cost_model_name(), "deepseek/deepseek-chat")
+            self.assertEqual(build_low_cost_model_name(), "deepseek-chat")
 
     def test_low_cost_model_can_use_dedicated_env(self) -> None:
         with patch.dict(
@@ -526,7 +600,7 @@ class ServerEventTests(unittest.TestCase):
                 "LOW_COST_MODEL_NAME": "deepseek-chat",
             },
         ):
-            self.assertEqual(build_low_cost_model_name(), "deepseek/deepseek-chat")
+            self.assertEqual(build_low_cost_model_name(), "deepseek-chat")
 
     def test_api_kwargs_use_single_generic_api_key(self) -> None:
         with patch.dict(os.environ, {"API_KEY": "test-key", "API_BASE": "https://example.test"}):
@@ -534,6 +608,19 @@ class ServerEventTests(unittest.TestCase):
                 build_api_kwargs(),
                 {"api_key": "test-key", "api_base": "https://example.test"},
             )
+
+    def test_litellm_model_name_adds_deepseek_provider_only_for_requests(self) -> None:
+        self.assertEqual(
+            build_litellm_model_name("deepseek-v4-pro"),
+            "deepseek/deepseek-v4-pro",
+        )
+        with patch.dict(os.environ, {"MODEL_PROVIDER": "deepseek"}):
+            self.assertEqual(
+                build_litellm_model_name("deepseek/deepseek-v4-pro"),
+                "deepseek/deepseek-v4-pro",
+            )
+        with patch.dict(os.environ, {"MODEL_PROVIDER": "openai"}):
+            self.assertEqual(build_litellm_model_name("gpt-4o-mini"), "gpt-4o-mini")
 
     def test_model_request_config_adds_reasoning_effort_only_when_enabled(self) -> None:
         disabled = build_model_request_config(
@@ -571,13 +658,13 @@ class ServerEventTests(unittest.TestCase):
     def test_deepseek_thinking_maps_compatible_efforts(self) -> None:
         medium = build_model_request_config(
             {
-                "model": "deepseek/deepseek-v4-pro",
+                "model": "deepseek-v4-pro",
                 "reasoning_effort": "medium",
             }
         )
         xhigh = build_model_request_config(
             {
-                "model": "deepseek/deepseek-v4-pro",
+                "model": "deepseek-v4-pro",
                 "reasoning_effort": "xhigh",
             }
         )
@@ -585,30 +672,114 @@ class ServerEventTests(unittest.TestCase):
         medium_kwargs = medium.completion_kwargs()
         xhigh_kwargs = xhigh.completion_kwargs()
 
+        self.assertEqual(medium_kwargs["model"], "deepseek/deepseek-v4-pro")
         self.assertNotIn("temperature", medium_kwargs)
         self.assertEqual(medium_kwargs["reasoning_effort"], "high")
         self.assertEqual(medium_kwargs["extra_body"], {"thinking": {"type": "enabled"}})
         self.assertEqual(xhigh_kwargs["reasoning_effort"], "max")
         self.assertEqual(xhigh_kwargs["extra_body"], {"thinking": {"type": "enabled"}})
 
-    def test_model_config_payload_includes_env_default_and_configured_options(self) -> None:
+    def test_fetch_deepseek_model_options_maps_models_endpoint(self) -> None:
+        def fake_opener(request, timeout):
+            self.assertEqual(request.full_url, "https://api.deepseek.com/models")
+            self.assertEqual(request.headers["Authorization"], "Bearer test-key")
+            self.assertEqual(timeout, 3.0)
+            return FakeHTTPResponse(
+                b'{"object":"list","data":[{"id":"deepseek-v4-flash"},{"id":"deepseek-v4-pro"}]}'
+            )
+
+        options = fetch_provider_model_options(
+            "deepseek",
+            api_key="test-key",
+            opener=fake_opener,
+        )
+
+        self.assertEqual(
+            options,
+            ["deepseek-v4-flash", "deepseek-v4-pro"],
+        )
+
+    def test_fetch_provider_model_options_fails_closed_without_api_key(self) -> None:
+        self.assertEqual(fetch_provider_model_options("deepseek", api_key=""), [])
+
+    def test_model_config_payload_prefers_remote_model_options(self) -> None:
         with patch.dict(
             os.environ,
             {
                 "MODEL_PROVIDER": "deepseek",
                 "MODEL_NAME": "deepseek-chat",
-                "MODEL_OPTIONS": "openai/gpt-4o-mini,deepseek/deepseek-reasoner",
+                "MODEL_OPTIONS": "deepseek-v4-flash,deepseek-v4-pro",
                 "REASONING_EFFORT": "medium",
             },
         ):
-            options = build_model_options()
-            payload = build_model_config_payload()
+            with patch(
+                "server.runtime.model_config.fetch_provider_model_options",
+                return_value=["deepseek-v4-pro"],
+            ):
+                options = build_model_options()
+                payload = build_model_config_payload()
 
-        self.assertEqual(options[0], "deepseek/deepseek-chat")
-        self.assertIn("openai/gpt-4o-mini", options)
-        self.assertEqual(payload["default_model"], "deepseek/deepseek-chat")
+        self.assertEqual(options, ["deepseek-v4-pro"])
+        self.assertEqual(payload["default_model"], "deepseek-chat")
+        self.assertEqual(payload["model_options"], ["deepseek-v4-pro"])
         self.assertEqual(payload["reasoning_effort"], "medium")
         self.assertEqual(payload["reasoning_effort_options"], ["off", "low", "medium", "high", "max"])
+
+    def test_model_config_payload_falls_back_to_env_options(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "MODEL_PROVIDER": "deepseek",
+                "MODEL_NAME": "deepseek-v4-pro",
+                "MODEL_OPTIONS": "deepseek-v4-flash,deepseek-v4-pro",
+            },
+        ):
+            with patch(
+                "server.runtime.model_config.fetch_provider_model_options",
+                return_value=[],
+            ):
+                payload = build_model_config_payload()
+
+        self.assertEqual(payload["default_model"], "deepseek-v4-pro")
+        self.assertEqual(payload["model_options"], ["deepseek-v4-flash", "deepseek-v4-pro"])
+
+    def test_litellm_uses_local_cost_map_by_default(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            configure_litellm_environment()
+
+            self.assertEqual(os.environ["LITELLM_LOCAL_MODEL_COST_MAP"], "True")
+
+    def test_litellm_cost_map_env_can_be_overridden(self) -> None:
+        with patch.dict(os.environ, {"LITELLM_LOCAL_MODEL_COST_MAP": "False"}, clear=True):
+            configure_litellm_environment()
+
+            self.assertEqual(os.environ["LITELLM_LOCAL_MODEL_COST_MAP"], "False")
+
+    def test_session_summaries_ignore_legacy_rows_with_system_last_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SessionStore(Path(tmp))
+            record = store.create_session(session_id="legacy-hidden")
+            store.append_event(
+                record.session_id,
+                "user_message",
+                {"turn_id": "turn-1", "content": "旧会话还在吗"},
+            )
+            store.append_event(
+                record.session_id,
+                "assistant_message",
+                {"turn_id": "turn-1", "content": "还在"},
+            )
+            with store._connect() as conn:
+                conn.execute(
+                    "UPDATE sessions SET last_turn_id = ? WHERE session_id = ?",
+                    ("system", record.session_id),
+                )
+
+            with patch.object(store, "load_events", wraps=store.load_events) as load_events:
+                summaries = list_session_summaries(store)
+
+        self.assertEqual(summaries, [])
+        load_events.assert_not_called()
 
 
 class WebSocketRequestDispatcherTests(unittest.IsolatedAsyncioTestCase):
@@ -655,6 +826,151 @@ class WebSocketRequestDispatcherTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ws.sent[0]["type"], "session_resumed")
             self.assertFalse(ws.sent[0]["session_state"]["suspended"])
 
+    async def test_change_directory_updates_workspace_policy_without_new_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            nested = root / "pkg"
+            nested.mkdir()
+            context = WebSocketRuntimeContext.create(root, "system")
+            original_session_id = context.session_id
+            ws = FakeWebSocket()
+            dispatcher = WebSocketRequestDispatcher(ws, context)
+
+            handled = await dispatcher.handle_control_packet(
+                {
+                    "type": "change_directory",
+                    "path": "pkg",
+                    "request_id": "cwd-1",
+                }
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(context.session_id, original_session_id)
+            self.assertEqual(context.workspace.current_dir, nested.resolve())
+            self.assertEqual(context.runner.ctx.current_dir, nested.resolve())
+            self.assertEqual(ws.sent[0]["type"], "workspace_policy_changed")
+            self.assertEqual(ws.sent[0]["reason"], "change_directory")
+            self.assertEqual(ws.sent[0]["workspace"]["current_dir"], nested.resolve().as_posix())
+            with self.assertRaises(KeyError):
+                context.session_store.get_session(context.session_id)
+
+    async def test_add_dir_updates_additional_roots_and_runner_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            external = Path(tmp) / "external"
+            root.mkdir()
+            external.mkdir()
+            context = WebSocketRuntimeContext.create(root, "system")
+            ws = FakeWebSocket()
+            dispatcher = WebSocketRequestDispatcher(ws, context)
+
+            handled = await dispatcher.handle_control_packet(
+                {
+                    "type": "add_dir",
+                    "path": external.as_posix(),
+                    "access": "write",
+                    "request_id": "add-dir-1",
+                }
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(ws.sent[0]["type"], "workspace_policy_changed")
+            self.assertEqual(ws.sent[0]["reason"], "add_dir")
+            self.assertEqual(
+                ws.sent[0]["workspace"]["additional_roots"][0]["path"],
+                external.resolve().as_posix(),
+            )
+            self.assertIn(external.resolve(), context.runner.ctx.filesystem_policy.readable_roots)
+            self.assertIn(external.resolve(), context.runner.ctx.filesystem_policy.writable_roots)
+
+    async def test_resume_session_restores_workspace_snapshot_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            nested = root / "pkg"
+            external = Path(tmp) / "external"
+            root.mkdir()
+            nested.mkdir()
+            external.mkdir()
+            (root / "AGENTS.md").write_text("root instructions", encoding="utf-8")
+            (nested / "AGENTS.md").write_text("nested instructions", encoding="utf-8")
+
+            seed_context = WebSocketRuntimeContext.create(root, "system")
+            session_id = "stored-session"
+            seed_context.session_store.create_session(
+                session_id=session_id,
+                metadata={"workspace": seed_context.workspace.as_dict()},
+            )
+            seed_context.session_store.append_event(
+                session_id,
+                "user_message",
+                {"turn_id": "turn-1", "content": "hello"},
+            )
+            seed_context.workspace.add_additional_root(external, "read")
+            seed_context.workspace.change_current_dir(nested)
+            seed_context.session_store.append_event(
+                session_id,
+                "workspace_policy_changed",
+                {
+                    "turn_id": "system",
+                    "workspace": seed_context.workspace.as_dict(),
+                },
+            )
+
+            context = WebSocketRuntimeContext.create(root, "system")
+            ws = FakeWebSocket()
+            dispatcher = WebSocketRequestDispatcher(ws, context)
+
+            handled = await dispatcher.handle_control_packet(
+                {"type": "resume_session", "session_id": session_id, "request_id": "resume-1"}
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(ws.sent[0]["type"], "session_resumed")
+            self.assertTrue(ws.sent[0]["resumed_from_disk"])
+            self.assertEqual(context.workspace.current_dir, nested.resolve())
+            self.assertEqual(context.runner.ctx.current_dir, nested.resolve())
+            self.assertEqual(context.workspace.additional_roots[0].path, external.resolve())
+            self.assertIn(external.resolve(), context.runner.ctx.filesystem_policy.readable_roots)
+            self.assertEqual(ws.sent[0]["messages"][0]["role"], "user")
+            self.assertEqual(ws.sent[0]["messages"][0]["content"], "hello")
+            self.assertIn("root instructions", context.history.messages[0]["content"])
+            self.assertIn("nested instructions", context.history.messages[0]["content"])
+
+    async def test_resume_session_rejects_legacy_workspace_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            root.mkdir()
+            context = WebSocketRuntimeContext.create(root, "system")
+            session_id = "legacy-session"
+            context.session_store.create_session(
+                session_id=session_id,
+                metadata={
+                    "workspace": {
+                        "root": root.as_posix(),
+                        "current_dir": root.as_posix(),
+                        "display_name": "workspace",
+                        "git_root": None,
+                        "allowed_roots": [],
+                    }
+                },
+            )
+            context.session_store.append_event(
+                session_id,
+                "user_message",
+                {"turn_id": "turn-1", "content": "legacy hello"},
+            )
+            ws = FakeWebSocket()
+            dispatcher = WebSocketRequestDispatcher(ws, context)
+
+            handled = await dispatcher.handle_control_packet(
+                {"type": "resume_session", "session_id": session_id, "request_id": "resume-old"}
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(ws.sent[0]["type"], "workspace_error")
+            self.assertEqual(ws.sent[0]["requested_session_id"], session_id)
+            self.assertIn("selected_root", ws.sent[0]["message"])
+
 
 class TurnRunnerTests(unittest.IsolatedAsyncioTestCase):
     async def test_wait_for_permission_decision_rejects_unrelated_packets(self) -> None:
@@ -671,18 +987,42 @@ class TurnRunnerTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
 
-        approved, feedback = await wait_for_permission_decision(
+        decision = await wait_for_permission_decision(
             ws,
             "session-1",
             "turn-1",
             "request-1",
         )
 
-        self.assertFalse(approved)
-        self.assertEqual(feedback, "换个方案")
+        self.assertFalse(decision.approved)
+        self.assertEqual(decision.feedback, "换个方案")
         self.assertEqual([event["type"] for event in ws.sent], ["error", "error"])
         self.assertEqual(ws.sent[0]["received_type"], "user_input")
         self.assertEqual(ws.sent[1]["received_request_id"], "other")
+
+    async def test_wait_for_permission_decision_accepts_session_prefix_scope(self) -> None:
+        ws = FakeWebSocket(
+            [
+                {
+                    "type": "permission_decision",
+                    "request_id": "request-1",
+                    "approved": True,
+                    "scope": "session",
+                    "prefix_rule": ["npm", "run", "test"],
+                },
+            ]
+        )
+
+        decision = await wait_for_permission_decision(
+            ws,
+            "session-1",
+            "turn-1",
+            "request-1",
+        )
+
+        self.assertTrue(decision.approved)
+        self.assertEqual(decision.scope, "session")
+        self.assertEqual(decision.prefix_rule, ("npm", "run", "test"))
 
     async def test_wait_for_clarification_response_rejects_unrelated_packets(self) -> None:
         ws = FakeWebSocket(

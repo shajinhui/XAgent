@@ -14,6 +14,8 @@ from tools.core.catalog import build_default_registry
 from tools.core.registry import ToolRegistry
 from tools.core.runner import ToolRunner, create_tool_context
 from workspace import WorkspaceContext
+from workspace.instructions import render_system_prompt_with_project_instructions
+from workspace.project_config import default_project_policy
 
 
 @dataclass
@@ -70,6 +72,7 @@ def create_websocket_session(
     session_id = str(uuid.uuid4())
     session_state = SessionRuntimeState(session_id=session_id)
     registry = build_default_registry()
+    project_policy = workspace.project_policy or default_project_policy()
     runner = ToolRunner(
         registry,
         create_tool_context(
@@ -77,9 +80,18 @@ def create_websocket_session(
             session_id,
             project_root=workspace.project_root,
             current_dir=workspace.current_dir,
+            additional_roots=workspace.additional_roots,
+            exec_policy=project_policy.exec_policy,
+            network_policy=project_policy.network_policy,
+            permission_profile=project_policy.permission_profile,
+            approval_policy=project_policy.approval_policy,
         ),
     )
-    history = ContextManager.with_system_prompt(system_prompt)
+    rendered_system_prompt, _instructions = render_system_prompt_with_project_instructions(
+        system_prompt,
+        workspace,
+    )
+    history = ContextManager.with_system_prompt(rendered_system_prompt)
     return session_id, session_state, registry, runner, history
 
 

@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List
 
 from server.protocol.serialization import object_to_dict
-from server.runtime.model_config import build_api_kwargs, build_low_cost_model_name
+
+from server.runtime.model_config import (
+    build_api_kwargs,
+    build_litellm_model_name,
+    build_low_cost_model_name,
+    configure_litellm_environment,
+)
 
 
 CONVERSATION_TITLE_MODEL_SOURCE = "low-cost-first-user"
@@ -95,10 +102,14 @@ def generate_conversation_title(
         return "新对话", CONVERSATION_TITLE_MODEL_SOURCE
 
     if completion_fn is None:
+        configure_litellm_environment()
         from litellm import completion as completion_fn
 
+    low_cost_model = build_low_cost_model_name()
+    low_cost_provider = os.getenv("LOW_COST_MODEL_PROVIDER", os.getenv("MODEL_PROVIDER", "openai"))
+
     response = completion_fn(
-        model=build_low_cost_model_name(),
+        model=build_litellm_model_name(low_cost_model, low_cost_provider),
         messages=[
             {
                 "role": "system",

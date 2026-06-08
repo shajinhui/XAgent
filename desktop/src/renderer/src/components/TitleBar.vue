@@ -20,6 +20,8 @@ const emit = defineEmits<{
   resume: []
   newConversation: []
   openWorkspace: []
+  changeDirectory: []
+  addDirectory: []
 }>()
 
 const statusLabel = computed(() => {
@@ -35,6 +37,33 @@ const canDisconnect = computed(() => props.connectionStatus === 'connected')
 const displayTitle = computed(() => props.title.trim() || '新对话')
 
 const workspaceLabel = computed(() => props.workspace?.display_name || '打开工作区')
+
+const currentDirLabel = computed(() => {
+  if (!props.workspace) return ''
+  const root = trimTrailingSeparators(props.workspace.selected_root)
+  const current = trimTrailingSeparators(props.workspace.current_dir)
+  if (current === root) return '.'
+  if (current.startsWith(`${root}/`)) return current.slice(root.length + 1)
+  return current
+})
+
+const workspaceTitle = computed(() => {
+  if (!props.workspace) return '打开工作区'
+  const roots = props.workspace.additional_roots
+    .map((root) => `${root.access === 'write' ? 'write' : 'read'} ${root.path}`)
+    .join('\n')
+  return [
+    `selected: ${props.workspace.selected_root}`,
+    `current: ${props.workspace.current_dir}`,
+    roots ? `additional:\n${roots}` : ''
+  ]
+    .filter(Boolean)
+    .join('\n')
+})
+
+function trimTrailingSeparators(path: string): string {
+  return path.replace(/[\\/]+$/, '')
+}
 </script>
 
 <template>
@@ -66,7 +95,7 @@ const workspaceLabel = computed(() => props.workspace?.display_name || '打开�
       <button
         class="workspace-pill"
         type="button"
-        :title="props.workspace?.selected_root || '打开工作区'"
+        :title="workspaceTitle"
         aria-label="打开工作区"
         @click="emit('openWorkspace')"
       >
@@ -74,7 +103,36 @@ const workspaceLabel = computed(() => props.workspace?.display_name || '打开�
           <path d="M3.5 6.5h6l2 2h9v9.5a2 2 0 0 1-2 2h-15v-13.5Z" />
           <path d="M3.5 8.5V6a2 2 0 0 1 2-2h3.2l1.8 2.5" />
         </svg>
-        <span>{{ workspaceLabel }}</span>
+        <span class="workspace-text">
+          <span>{{ workspaceLabel }}</span>
+          <small v-if="props.workspace">{{ currentDirLabel }}</small>
+        </span>
+      </button>
+      <button
+        v-if="props.workspace"
+        class="icon-button"
+        type="button"
+        aria-label="切换当前目录"
+        title="切换当前目录"
+        @click="emit('changeDirectory')"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M3.5 6.5h6l2 2h9v8.5a2 2 0 0 1-2 2h-15V6.5Z" />
+          <path d="m9 13 3 3 3-3M12 16V9" />
+        </svg>
+      </button>
+      <button
+        v-if="props.workspace"
+        class="icon-button"
+        type="button"
+        aria-label="加入额外目录"
+        title="加入额外目录"
+        @click="emit('addDirectory')"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M3.5 6.5h6l2 2h9v9.5a2 2 0 0 1-2 2h-15V6.5Z" />
+          <path d="M12 12v6M9 15h6" />
+        </svg>
       </button>
       <button
         v-if="isSuspended"

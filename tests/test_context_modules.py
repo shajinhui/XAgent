@@ -48,9 +48,11 @@ class ContextModuleTests(unittest.TestCase):
         history.append_assistant_message({"role": "assistant", "content": "ok"})
         history.messages[-1]["reasoning_content"] = "hidden"
 
+        history.replace_system_prompt("updated system")
         history.clear_historical_reasoning_content()
 
         self.assertEqual([message["role"] for message in history.messages], ["system", "user", "assistant"])
+        self.assertEqual(history.messages[0]["content"], "updated system")
         self.assertNotIn("reasoning_content", history.messages[-1])
 
     def test_tool_invocation_carries_turn_context(self) -> None:
