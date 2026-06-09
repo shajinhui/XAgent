@@ -230,6 +230,38 @@ class ToolRegistryTests(unittest.TestCase):
             self.assertEqual(result.metadata["permission_action"], "ask")
             self.assertEqual(result.metadata["category"], "command_approval")
 
+    def test_run_command_simple_read_only_command_skips_permission_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _registry, runner = build_default_runner(root)
+
+            with patch.object(
+                runner.ctx.command_executor,
+                "run",
+                return_value=CommandExecResult(True, 0, "ok\n", ""),
+            ) as run_mock:
+                result = runner.execute(
+                    "run_command",
+                    json.dumps({"command": "ls -la"}),
+                )
+
+            self.assertTrue(result.ok)
+            self.assertTrue(run_mock.called)
+            self.assertIn("exit_code: 0", result.content)
+
+    def test_run_command_compound_read_only_command_still_requests_permission(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _registry, runner = build_default_runner(Path(tmp))
+
+            result = runner.execute(
+                "run_command",
+                json.dumps({"command": "pwd && ls -la"}),
+            )
+
+            self.assertFalse(result.ok)
+            self.assertEqual(result.metadata["permission_action"], "ask")
+            self.assertEqual(result.metadata["category"], "command_approval")
+
     def test_run_command_approval_policy_never_denies_permission_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             registry = build_default_registry()

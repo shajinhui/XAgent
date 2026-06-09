@@ -35,6 +35,39 @@ class ExecPolicyTests(unittest.TestCase):
         self.assertTrue(decision.requires_approval)
         self.assertEqual(decision.suggested_prefix_rule, ("ruff", "check"))
 
+    def test_simple_read_only_command_allows_without_approval(self) -> None:
+        policy = ExecPolicy()
+
+        decision = policy.decide("ls -la")
+
+        self.assertTrue(decision.allowed)
+        self.assertEqual(decision.category, "safe_read_only")
+        self.assertFalse(decision.approval_required)
+
+    def test_compound_read_only_command_still_requires_approval(self) -> None:
+        policy = ExecPolicy()
+
+        decision = policy.decide("pwd && ls -la")
+
+        self.assertTrue(decision.requires_approval)
+        self.assertIsNone(decision.suggested_prefix_rule)
+
+    def test_read_only_command_with_external_path_still_requires_approval(self) -> None:
+        policy = ExecPolicy()
+
+        decision = policy.decide("cat ~/.ssh/id_rsa")
+
+        self.assertTrue(decision.requires_approval)
+        self.assertIsNone(decision.suggested_prefix_rule)
+
+    def test_common_mutating_runtime_command_still_requires_approval(self) -> None:
+        policy = ExecPolicy()
+
+        decision = policy.decide("python -m unittest discover -s tests")
+
+        self.assertTrue(decision.allowed)
+        self.assertTrue(decision.approval_required)
+
     def test_dangerous_command_is_denied_even_when_approved(self) -> None:
         policy = ExecPolicy()
 

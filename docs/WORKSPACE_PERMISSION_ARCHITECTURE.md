@@ -361,8 +361,9 @@ class ExecRule:
 3. 匹配 dangerous command heuristic。
 4. 匹配 explicit ask rule。
 5. 匹配 explicit allow rule。
-6. 匹配 known safe command heuristic。
-7. 根据 approval policy 与 sandbox mode 决定 allow/ask/deny。
+6. 匹配 simple read-only command heuristic，简单只读探索命令可直接执行。
+7. 匹配 known command heuristic，常见但可能变更项目状态的命令仍需要审批。
+8. 根据 approval policy 与 sandbox mode 决定 allow/ask/deny。
 
 危险命令第一版保留并扩展：
 

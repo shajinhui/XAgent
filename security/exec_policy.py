@@ -30,25 +30,24 @@ PROTECTED_COMMAND_PATTERNS = (
     r"(^|\s)(\.codex-mini)(/|\s|$|[;&|<>])",
 )
 
-KNOWN_SAFE_COMMANDS = frozenset(
+SAFE_READ_ONLY_COMMANDS = frozenset(
+    {"pwd", "ls", "rg", "grep", "cat", "head", "tail"}
+)
+
+KNOWN_COMMANDS_REQUIRING_APPROVAL = frozenset(
+    {"echo", "find", "python", "python3", "pytest", "pip", "npm", "node", "git", "make"}
+)
+
+SHELL_META_CHARS = frozenset(";|&<>$`")
+UNSAFE_READ_ONLY_OPTIONS = frozenset(
     {
-        "ls",
-        "pwd",
-        "cat",
-        "head",
-        "tail",
-        "echo",
-        "rg",
-        "grep",
-        "find",
-        "python",
-        "python3",
-        "pytest",
-        "pip",
-        "npm",
-        "node",
-        "git",
-        "make",
+        "-L",
+        "--follow",
+        "--pre",
+        "--pre-glob",
+        "-r",
+        "-R",
+        "--recursive",
     }
 )
 
@@ -186,7 +185,15 @@ class ExecPolicy:
 
         cmd = argv[0]
         suggestion = _suggest_prefix_rule(argv)
-        if cmd in KNOWN_SAFE_COMMANDS:
+        if _is_simple_read_only_command(command, argv):
+            return CommandDecision(
+                action="allow",
+                category="safe_read_only",
+                suggested_prefix_rule=None,
+                approval_required=False,
+            )
+
+        if cmd in KNOWN_COMMANDS_REQUIRING_APPROVAL:
             return CommandDecision(
                 action="allow",
                 category="allowed",
@@ -232,8 +239,34 @@ def _matches_prefix(argv: tuple[str, ...], prefix: tuple[str, ...]) -> bool:
     return bool(prefix) and len(argv) >= len(prefix) and argv[: len(prefix)] == prefix
 
 
+def _is_simple_read_only_command(command: str, argv: tuple[str, ...]) -> bool:
+    """只给简单只读探索命令免审批，避免 shell 组合命令借壳执行写操作。"""
+
+    if not argv or argv[0] not in SAFE_READ_ONLY_COMMANDS:
+        return False
+    if any(char in command for char in SHELL_META_CHARS):
+        return False
+    return all(_is_safe_read_only_arg(arg) for arg in argv[1:])
+
+
+def _is_safe_read_only_arg(arg: str) -> bool:
+    """限制自动执行时的参数形态，外部路径和递归/跟随选项继续走审批。"""
+
+    if not arg:
+        return False
+    if arg in UNSAFE_READ_ONLY_OPTIONS:
+        return False
+    if _is_external_or_parent_path(arg):
+        return False
+    return True
+
+
 def _suggest_prefix_rule(argv: tuple[str, ...]) -> tuple[str, ...] | None:
     if len(argv) < 2:
+        return None
+    if any(any(char in part for char in SHELL_META_CHARS) for part in argv):
+        return None
+    if any(_is_external_or_parent_path(part) for part in argv):
         return None
 
     if argv[0] == "npm" and len(argv) >= 3 and argv[1] == "run":
@@ -248,3 +281,14 @@ def _suggest_prefix_rule(argv: tuple[str, ...]) -> tuple[str, ...] | None:
     if any(_matches_prefix(candidate, denied) for denied in PREFIX_SUGGESTION_DENYLIST):
         return None
     return candidate
+
+
+def _is_external_or_parent_path(arg: str) -> bool:
+    return (
+        arg.startswith("/")
+        or arg.startswith("~")
+        or arg == ".."
+        or arg.startswith("../")
+        or "/../" in arg
+        or arg.endswith("/..")
+    )

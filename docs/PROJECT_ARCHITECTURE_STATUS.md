@@ -403,11 +403,12 @@ append-only JSONL transcript 读写器。
 
 当前状态：
 
-- 先通过 `SecurityPolicy.check_command()` 委托 `ExecPolicy` 做危险命令、prefix rule 和 known safe command 检查。
+- 先通过 `SecurityPolicy.check_command()` 委托 `ExecPolicy` 做危险命令、prefix rule、简单只读命令和常见高风险命令检查。
 - 需要用户确认的命令会返回 `ask` 权限 metadata，可携带 `suggested_prefix_rule`。
 - 被拒绝时记录到 `CircuitBreaker`。
 - 连续拒绝达到阈值时，在错误文本和 metadata 中提示会话挂起。
-- 即使命中 known safe command，`run_command` 默认也需要用户确认后才会进入 macOS 沙箱执行；session allow prefix 可跳过后续同类确认。
+- `pwd`、`ls`、`rg`、`grep`、`cat`、`head`、`tail` 等简单只读探索命令会跳过确认；带 shell 组合符、外部路径、父目录路径或递归/跟随选项的命令仍会请求确认。
+- `git`、`npm`、`python`、`node`、`make` 等常见但可能改变项目状态的命令默认仍需要用户确认；session allow prefix 可跳过后续同类确认。
 - 允许执行时交给 `SecureMacOSSandboxExecutor.run()`。
 - 工具 schema 中的 `timeout` 已传给 macOS sandbox executor。
 - 工具 schema 支持可选 `cwd`，会通过 `SecurityPolicy.resolve_command_cwd()` 限制在 active workspace 内部，并拒绝文件、越界路径和受保护目录。
@@ -787,7 +788,7 @@ final_answer
 - 读取 `/etc/passwd` 会被路径越界策略拦截。
 - 执行 `rm -rf /` 会被危险命令策略拦截。
 - 非白名单命令会返回 `permission_action=ask`。
-- 白名单命令也会在 `run_command` 执行前请求用户确认。
+- 简单只读探索命令可直接进入 `run_command`，常见但可能变更项目的命令仍会在执行前请求用户确认。
 - `write_file` / `edit_file` 在未批准时会返回 `permission_action=ask`。
 - WebSocket event helper、streaming tool call 拼接、session suspend/resume 状态有单元测试覆盖。
 - session store、JSONL transcript、历史会话摘要、模型上下文恢复和首条用户提问标题生成有单元测试覆盖。
