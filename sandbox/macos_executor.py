@@ -12,17 +12,6 @@ from pathlib import Path
 from security.permissions import FileSystemPolicy, NetworkPolicy
 
 
-SYSTEM_READ_PATHS = (
-    "/bin",
-    "/sbin",
-    "/usr/bin",
-    "/usr/sbin",
-    "/usr/lib",
-    "/usr/libexec",
-    "/System",
-    "/Library",
-    "/private/etc",
-)
 TEMP_PATHS = (
     "/tmp",
     "/private/tmp",
@@ -71,7 +60,6 @@ class SecureMacOSSandboxExecutor:
     ) -> str:
         """按当前 filesystem/network policy 生成 Seatbelt profile。"""
 
-        read_filters = self._path_filters(_readable_sandbox_paths(filesystem_policy))
         write_filters = self._path_filters(_writable_sandbox_paths(filesystem_policy))
         protected_read_denies = self._protected_path_denies(
             "file-read*",
@@ -93,9 +81,9 @@ class SecureMacOSSandboxExecutor:
 (allow process*)
 (allow signal (target self))
 
-; Commands can read system tools plus filesystem policy readable roots.
-(allow file-read*
-{read_filters})
+; macOS 启动二进制时会读取 dyld/cryptex/runtime 等非稳定公开路径。
+; 这里放开读以保证进程可启动，写入仍由 filesystem policy 严格限制。
+(allow file-read*)
 
 ; Keep writes inside filesystem policy writable roots and temporary directories.
 (allow file-write*
@@ -196,16 +184,6 @@ class SecureMacOSSandboxExecutor:
             proc.stdout,
             stderr,
         )
-
-
-def _readable_sandbox_paths(filesystem_policy: FileSystemPolicy) -> tuple[Path, ...]:
-    paths = (
-        *tuple(Path(path) for path in SYSTEM_READ_PATHS),
-        *filesystem_policy.readable_roots,
-        *tuple(Path(path) for path in TEMP_PATHS),
-        DEV_NULL,
-    )
-    return tuple(_dedupe_existing(paths))
 
 
 def _writable_sandbox_paths(filesystem_policy: FileSystemPolicy) -> tuple[Path, ...]:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import platform
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -41,10 +43,10 @@ class MacOSSandboxExecutorTests(unittest.TestCase):
         self.assertEqual(call_args[0], "/usr/bin/sandbox-exec")
         self.assertEqual(call_args[1], "-p")
         self.assertIn("(deny default)", call_args[2])
-        self.assertNotIn("(allow file-read*)", call_args[2])
-        self.assertIn("(allow file-read*", call_args[2])
+        self.assertIn("(allow file-read*)", call_args[2])
         self.assertIn("(allow file-write*", call_args[2])
         self.assertIn(f'(subpath "{selected_root.as_posix()}")', call_args[2])
+        self.assertIn(f'(deny file-read* (literal "{selected_root.as_posix()}/.env"))', call_args[2])
         self.assertNotIn("(allow network*)", call_args[2])
         self.assertIn("/bin/sh", call_args)
 
@@ -85,9 +87,37 @@ class MacOSSandboxExecutorTests(unittest.TestCase):
 
             self.assertTrue(result.ok)
             profile = run_mock.call_args.args[0][2]
-            self.assertIn(f'(subpath "{read_root.resolve().as_posix()}")', profile)
             self.assertIn(f'(subpath "{write_root.resolve().as_posix()}")', profile)
             self.assertIn("(allow network*)", profile)
+
+    @unittest.skipUnless(
+        platform.system() == "Darwin" and shutil.which("sandbox-exec"),
+        "需要 macOS sandbox-exec 做端到端验证",
+    )
+    def test_policy_profile_launches_command_and_blocks_protected_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            selected_root = Path(tmp)
+            (selected_root / ".env").write_text("SECRET=1\n", encoding="utf-8")
+            filesystem_policy = FileSystemPolicy.workspace_write(selected_root)
+            executor = SecureMacOSSandboxExecutor(selected_root)
+
+            list_result = executor.run(
+                "pwd && ls -la",
+                filesystem_policy=filesystem_policy,
+                network_policy=NetworkPolicy.RESTRICTED,
+                timeout_seconds=3,
+            )
+            env_result = executor.run(
+                "cat .env",
+                filesystem_policy=filesystem_policy,
+                network_policy=NetworkPolicy.RESTRICTED,
+                timeout_seconds=3,
+            )
+
+        self.assertTrue(list_result.ok, list_result.stderr)
+        self.assertIn(selected_root.as_posix(), list_result.stdout)
+        self.assertFalse(env_result.ok)
+        self.assertIn("Operation not permitted", env_result.stderr)
 
     def test_run_uses_workspace_internal_cwd_without_changing_profile_root(self) -> None:
         project_root = Path.cwd()

@@ -2,6 +2,39 @@
 
 本文档记录 Codex-mini 开发过程中遇到的典型问题、误判路径、根因和修复方式。目标不是写复盘作文，而是给后续排查留下可执行的线索。
 
+## 2026-06-09：macOS Seatbelt 限制 file-read roots 导致命令全部 -6
+
+### 现象
+
+- `run_command` 执行 `ls -la`、`pwd && ls -la`、`/bin/ls -la <workspace>` 都失败。
+- stdout/stderr 都为空，`exit_code` 是 `-6`。
+- 直觉上容易判断成没有授予 `process-exec` / fork 权限。
+
+### 关键误判
+
+当前 profile 已经包含：
+
+```scheme
+(allow process*)
+```
+
+所以根因不是单纯缺少进程执行权限。
+
+### 根因
+
+把 `file-read*` 限制到固定系统目录和 readable roots 后，macOS 上连 `/usr/bin/true`、`/bin/sh` 都会在启动阶段 `SIGABRT(-6)`。原因是二进制启动链路会读取 dyld、cryptex、runtime cache 等非稳定公开路径，固定路径白名单无法可靠覆盖。
+
+### 修复方式
+
+- Seatbelt profile 中放开 `file-read*`，保证基础命令进程可以启动。
+- 继续用 `file-write*` 严格限制写入到 `FileSystemPolicy.writable_roots`、临时目录和 `/dev/null`。
+- 对 workspace 内 `.env` 等受保护路径继续生成显式 `deny file-read*`。
+- 增加真实 macOS 端到端测试：`pwd && ls -la` 应该成功，`cat .env` 应该被 `Operation not permitted` 拒绝。
+
+### 设计边界
+
+这不是旧协议兼容胶水，而是当前 macOS Seatbelt adapter 的平台约束。当前 `run_command` 的写隔离仍由 Seatbelt 执行，读隔离暂时是“受保护路径级别”；完整 readable roots 读隔离需要后续继续研究更底层的 sandbox adapter。
+
 ## 2026-05-14：后端启动后 CPU 占用偏高
 
 ### 现象

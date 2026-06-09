@@ -464,7 +464,7 @@ tool call
 
 ## Sandbox 生成
 
-当前 `sandbox/macos_executor.py` 已改为 policy-driven。第一版实现会读取必要系统目录、临时目录和 `FileSystemPolicy.readable_roots`，并只写入 `FileSystemPolicy.writable_roots`、临时目录和 `/dev/null`。
+当前 `sandbox/macos_executor.py` 已改为 policy-driven。第一版实现会用 `FileSystemPolicy.writable_roots` 限制写入，并对 workspace 内受保护读路径生成显式 deny。macOS 二进制启动阶段会读取 dyld/cryptex/runtime 等非稳定公开路径，实践中不能只允许固定 readable roots，否则 `/bin/sh`、`ls`、`true` 这类基础命令会被 Seatbelt 以 `-6` 终止。
 
 目标接口：
 
@@ -484,7 +484,7 @@ class SecureMacOSSandboxExecutor:
 
 Seatbelt profile 生成规则：
 
-- `file-read*` 只允许必要系统目录、临时目录和 readable roots。
+- `file-read*` 当前放开以保证 macOS 进程可启动；`.env` 等受保护读路径用 deny 明确拦截。
 - `file-write*` 只允许 writable roots。
 - protected metadata 用 deny 或 require-not carveout。
 - deny read glob 转成 read deny。

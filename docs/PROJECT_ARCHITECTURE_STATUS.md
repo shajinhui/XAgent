@@ -533,7 +533,7 @@ macOS 原生命令沙箱执行器。
 - 可接收 workspace 内部 cwd 来改变 shell 执行目录，cwd 仍需通过 `FileSystemPolicy.resolve_command_cwd()`。
 - `run()` 接收 `FileSystemPolicy` 和 `NetworkPolicy`，并据此生成 Seatbelt profile。
 - 默认禁止网络访问；只有 `NetworkPolicy.ENABLED` 才生成 network allow。
-- 允许读取必要系统目录、临时目录和 filesystem policy readable roots。
+- macOS 二进制启动需要读取 dyld/cryptex/runtime 等非稳定公开路径，因此命令沙箱放开 `file-read*` 以保证进程可启动；workspace 内 `.env` 等受保护读路径仍用显式 deny 拦截。
 - 只允许写 filesystem policy writable roots、`/tmp`、`/private/tmp`、`/private/var/folders` 和 `/dev/null`。
 - 设置默认超时 `20s`。
 
@@ -542,6 +542,7 @@ macOS 原生命令沙箱执行器。
 - 允许命令产生的项目内文件变更真实落到项目目录。
 - 目前只支持 macOS/Darwin；非 macOS 会返回不可用错误。
 - 如果父进程本身已经处在受限沙箱中，`sandbox-exec` 可能返回 `sandbox_apply: Operation not permitted`，需要在正常终端/桌面应用运行环境中做端到端验证。
+- 当前 Seatbelt 对 `run_command` 的读隔离是受保护路径级别，不是完整 readable roots 隔离；完整读隔离需要后续更底层的 sandbox adapter 或进程启动白名单研究。
 - 还没有系统级精细文件写入策略，例如只允许写某些扩展名或只允许写模型声明的路径。
 - 当前只实现 roots + protected name 级别的 profile 生成；复杂 glob/special path 展开还没有做。
 
