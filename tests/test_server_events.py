@@ -49,6 +49,8 @@ from server.views.session_summary import (
     session_display_messages,
     summarize_session_record,
 )
+from security.permissions import PermissionProfile
+from workspace import TrustLevel, WorkspaceTrustStore
 
 
 class FakeWebSocket:
@@ -882,6 +884,122 @@ class WebSocketRequestDispatcherTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertIn(external.resolve(), context.runner.ctx.filesystem_policy.readable_roots)
             self.assertIn(external.resolve(), context.runner.ctx.filesystem_policy.writable_roots)
+
+    async def test_trust_workspace_loads_project_policy_and_emits_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            trust_path = Path(tmp) / "trust.json"
+            root.mkdir()
+            config_dir = root / ".codex-mini"
+            config_dir.mkdir()
+            (config_dir / "config.toml").write_text(
+                """
+[permissions]
+profile = "read_only"
+
+[[exec.rules]]
+action = "deny"
+prefix = ["npm", "publish"]
+category = "publish_blocked"
+""".strip(),
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {"CODEX_MINI_TRUST_STORE": trust_path.as_posix()}):
+                context = WebSocketRuntimeContext.create(root, "system")
+                original_session_id = context.session_id
+                ws = FakeWebSocket()
+                dispatcher = WebSocketRequestDispatcher(ws, context)
+
+                handled = await dispatcher.handle_control_packet(
+                    {"type": "trust_workspace", "request_id": "trust-1"}
+                )
+
+                self.assertTrue(handled)
+                self.assertEqual(context.session_id, original_session_id)
+                self.assertEqual(ws.sent[0]["type"], "workspace_policy_changed")
+                self.assertEqual(ws.sent[0]["reason"], "trust_workspace")
+                self.assertEqual(ws.sent[0]["workspace"]["trust"]["level"], "trusted")
+                self.assertEqual(context.workspace.trust.level, TrustLevel.TRUSTED)
+                assert context.workspace.project_policy is not None
+                self.assertEqual(context.workspace.project_policy.source, "project_config")
+                self.assertEqual(context.runner.ctx.permission_profile, PermissionProfile.READ_ONLY)
+                self.assertEqual(
+                    context.runner.ctx.policy.check_command("npm publish").category,
+                    "publish_blocked",
+                )
+                self.assertEqual(
+                    WorkspaceTrustStore(trust_path).trust_for(root).level,
+                    TrustLevel.TRUSTED,
+                )
+
+    async def test_untrust_workspace_returns_to_default_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            trust_path = Path(tmp) / "trust.json"
+            root.mkdir()
+            config_dir = root / ".codex-mini"
+            config_dir.mkdir()
+            (config_dir / "config.toml").write_text(
+                "[permissions]\nprofile = \"read_only\"\n",
+                encoding="utf-8",
+            )
+            WorkspaceTrustStore(trust_path).mark_trusted(root)
+
+            with patch.dict(os.environ, {"CODEX_MINI_TRUST_STORE": trust_path.as_posix()}):
+                context = WebSocketRuntimeContext.create(root, "system")
+                self.assertEqual(context.runner.ctx.permission_profile, PermissionProfile.READ_ONLY)
+                ws = FakeWebSocket()
+                dispatcher = WebSocketRequestDispatcher(ws, context)
+
+                handled = await dispatcher.handle_control_packet(
+                    {"type": "untrust_workspace", "request_id": "untrust-1"}
+                )
+
+                self.assertTrue(handled)
+                self.assertEqual(ws.sent[0]["type"], "workspace_policy_changed")
+                self.assertEqual(ws.sent[0]["reason"], "untrust_workspace")
+                self.assertEqual(ws.sent[0]["workspace"]["trust"]["level"], "untrusted")
+                self.assertEqual(context.workspace.trust.level, TrustLevel.UNTRUSTED)
+                assert context.workspace.project_policy is not None
+                self.assertEqual(context.workspace.project_policy.source, "defaults")
+                self.assertEqual(context.runner.ctx.permission_profile, PermissionProfile.WORKSPACE_WRITE)
+                self.assertEqual(
+                    WorkspaceTrustStore(trust_path).trust_for(root).level,
+                    TrustLevel.UNTRUSTED,
+                )
+
+    async def test_trust_workspace_rejects_invalid_project_config_without_persisting_trust(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            trust_path = Path(tmp) / "trust.json"
+            root.mkdir()
+            config_dir = root / ".codex-mini"
+            config_dir.mkdir()
+            (config_dir / "config.toml").write_text(
+                "[model]\nprovider = \"deepseek\"\n",
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {"CODEX_MINI_TRUST_STORE": trust_path.as_posix()}):
+                context = WebSocketRuntimeContext.create(root, "system")
+                ws = FakeWebSocket()
+                dispatcher = WebSocketRequestDispatcher(ws, context)
+
+                handled = await dispatcher.handle_control_packet(
+                    {"type": "trust_workspace", "request_id": "trust-invalid"}
+                )
+
+                self.assertTrue(handled)
+                self.assertEqual(ws.sent[0]["type"], "workspace_error")
+                self.assertEqual(ws.sent[0]["requested_trust_level"], "trusted")
+                self.assertEqual(context.workspace.trust.level, TrustLevel.SESSION_ONLY)
+                self.assertEqual(
+                    WorkspaceTrustStore(trust_path).trust_for(root).level,
+                    TrustLevel.SESSION_ONLY,
+                )
 
     async def test_resume_session_restores_workspace_snapshot_policy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

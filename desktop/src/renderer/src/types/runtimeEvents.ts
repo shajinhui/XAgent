@@ -172,7 +172,7 @@ export type WorkspacePolicyChangedEvent = RuntimeEventBase & {
   previous_workspace: RuntimeWorkspace
   workspace: RuntimeWorkspace
   session_state: RuntimeSessionState
-  reason: 'change_directory' | 'add_dir' | string
+  reason: 'change_directory' | 'add_dir' | 'trust_workspace' | 'untrust_workspace' | string
   current_dir?: string
   added_root?: RuntimeAdditionalRoot
 }
@@ -352,6 +352,11 @@ export type RuntimeClientPacket =
       type: 'add_dir'
       path: string
       access: 'read' | 'write'
+      request_id?: string
+      turn_id?: string
+    }
+  | {
+      type: 'trust_workspace' | 'untrust_workspace'
       request_id?: string
       turn_id?: string
     }

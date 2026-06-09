@@ -22,6 +22,8 @@ const emit = defineEmits<{
   openWorkspace: []
   changeDirectory: []
   addDirectory: []
+  trustWorkspace: []
+  untrustWorkspace: []
 }>()
 
 const statusLabel = computed(() => {
@@ -37,6 +39,19 @@ const canDisconnect = computed(() => props.connectionStatus === 'connected')
 const displayTitle = computed(() => props.title.trim() || '新对话')
 
 const workspaceLabel = computed(() => props.workspace?.display_name || '打开工作区')
+
+const workspaceTrustLabel = computed(() => {
+  const level = props.workspace?.trust.level
+  if (level === 'trusted') return 'trusted'
+  if (level === 'untrusted') return 'untrusted'
+  return 'session only'
+})
+
+const isWorkspaceTrusted = computed(() => props.workspace?.trust.level === 'trusted')
+
+const trustActionLabel = computed(() =>
+  isWorkspaceTrusted.value ? '取消信任当前项目' : '信任当前项目'
+)
 
 const currentDirLabel = computed(() => {
   if (!props.workspace) return ''
@@ -55,6 +70,7 @@ const workspaceTitle = computed(() => {
   return [
     `selected: ${props.workspace.selected_root}`,
     `current: ${props.workspace.current_dir}`,
+    `trust: ${props.workspace.trust.level}`,
     roots ? `additional:\n${roots}` : ''
   ]
     .filter(Boolean)
@@ -105,8 +121,23 @@ function trimTrailingSeparators(path: string): string {
         </svg>
         <span class="workspace-text">
           <span>{{ workspaceLabel }}</span>
-          <small v-if="props.workspace">{{ currentDirLabel }}</small>
+          <small v-if="props.workspace">{{ currentDirLabel }} · {{ workspaceTrustLabel }}</small>
         </span>
+      </button>
+      <button
+        v-if="props.workspace"
+        class="icon-button"
+        :class="{ active: isWorkspaceTrusted }"
+        type="button"
+        :aria-label="trustActionLabel"
+        :title="trustActionLabel"
+        @click="isWorkspaceTrusted ? emit('untrustWorkspace') : emit('trustWorkspace')"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3.5 19 6v5.4c0 4.3-2.8 7.8-7 9.1-4.2-1.3-7-4.8-7-9.1V6l7-2.5Z" />
+          <path v-if="isWorkspaceTrusted" d="m9 12 2 2 4-4" />
+          <path v-else d="M9 12h6" />
+        </svg>
       </button>
       <button
         v-if="props.workspace"

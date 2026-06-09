@@ -870,6 +870,32 @@ export const useRuntimeStore = defineStore('runtime', {
       })
     },
 
+    async trustWorkspace(): Promise<void> {
+      await this.setWorkspaceTrust(true)
+    },
+
+    async untrustWorkspace(): Promise<void> {
+      await this.setWorkspaceTrust(false)
+    },
+
+    async setWorkspaceTrust(trusted: boolean): Promise<void> {
+      if (!this.workspace) return
+
+      if (!runtimeSocket?.isOpen) {
+        await this.connect({ silent: true })
+      }
+
+      if (!runtimeSocket?.isOpen) {
+        this.errorMessage = '后端还没有连接，无法更新工作区信任状态。'
+        return
+      }
+
+      runtimeSocket.send({
+        type: trusted ? 'trust_workspace' : 'untrust_workspace',
+        request_id: `${trusted ? 'trust' : 'untrust'}-workspace-${Date.now()}`
+      })
+    },
+
     sendPermissionDecision(
       approved: boolean,
       feedback?: string,
@@ -990,6 +1016,10 @@ export const useRuntimeStore = defineStore('runtime', {
             chat.addSystemMessage(
               `已加入额外目录：${event.added_root.access === 'write' ? '可写' : '只读'} ${event.added_root.path}`
             )
+          } else if (event.reason === 'trust_workspace') {
+            chat.addSystemMessage('已信任当前项目：后端会读取白名单内的项目策略配置。')
+          } else if (event.reason === 'untrust_workspace') {
+            chat.addSystemMessage('已取消信任当前项目：后端将忽略项目本地策略配置。')
           }
           break
         case 'turn_started':

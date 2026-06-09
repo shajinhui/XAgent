@@ -14,10 +14,11 @@ from context_manager import ContextManager
 from session import SessionStore, recover_session_messages
 from server.runtime.session_state import SessionRuntimeState, create_websocket_session
 from server.views.session_summary import session_display_messages, summarize_session_record
+from security.exec_policy import ExecPolicy
 from tools.core.catalog import build_default_registry
 from tools.core.registry import ToolRegistry
 from tools.core.runner import ToolRunner, create_tool_context
-from workspace import WorkspaceContext, WorkspaceManager, WorkspaceValidationError
+from workspace import TrustLevel, WorkspaceContext, WorkspaceManager, WorkspaceValidationError
 from workspace.instructions import render_system_prompt_with_project_instructions
 from workspace.project_config import default_project_policy
 
@@ -117,6 +118,30 @@ class WebSocketRuntimeContext:
         self.refresh_history_system_prompt()
         return previous_workspace, root.as_dict()
 
+    def change_workspace_trust(self, level: TrustLevel) -> Dict[str, Any]:
+        """切换当前 workspace 的信任状态，并按新 trust gate 重新加载策略。"""
+
+        previous_workspace = self.workspace.as_dict()
+        if level == TrustLevel.TRUSTED:
+            trust = self.workspace_manager.trust_project(self.workspace.project_root)
+        elif level == TrustLevel.UNTRUSTED:
+            trust = self.workspace_manager.untrust_project(self.workspace.project_root)
+        else:
+            raise WorkspaceValidationError(f"不支持切换到 trust level: {level.value}")
+
+        selected_root = self.workspace.selected_root
+        current_dir = self.workspace.current_dir
+        additional_roots = list(self.workspace.additional_roots)
+        self.workspace = self.workspace_manager.open(selected_root, trust_override=trust)
+        self.workspace.additional_roots = additional_roots
+        self.workspace.change_current_dir(current_dir)
+        self.session_store = _require_session_store(self.workspace)
+        # trust 边界变化时不继承旧 exec policy，避免保留已撤销的项目策略规则。
+        project_policy = self.workspace.project_policy or default_project_policy()
+        self.refresh_tool_runner(exec_policy=project_policy.exec_policy)
+        self.refresh_history_system_prompt()
+        return previous_workspace
+
     def current_system_prompt(self) -> str:
         """按当前 workspace 生成模型可见 system prompt。"""
 
@@ -133,11 +158,12 @@ class WebSocketRuntimeContext:
         self.history.replace_system_prompt(rendered)
         return rendered
 
-    def refresh_tool_runner(self) -> None:
-        """按最新 workspace policy 重建 ToolRunner，同时保留会话级权限状态。"""
+    def refresh_tool_runner(self, *, exec_policy: ExecPolicy | None = None) -> None:
+        """按最新 workspace policy 重建 ToolRunner，可选择替换命令策略边界。"""
 
         previous_ctx = self.runner.ctx
         project_policy = self.workspace.project_policy or default_project_policy()
+        active_exec_policy = exec_policy if exec_policy is not None else previous_ctx.policy.exec_policy
         self.runner = ToolRunner(
             self.registry,
             create_tool_context(
@@ -146,7 +172,7 @@ class WebSocketRuntimeContext:
                 project_root=self.workspace.project_root,
                 current_dir=self.workspace.current_dir,
                 additional_roots=self.workspace.additional_roots,
-                exec_policy=previous_ctx.policy.exec_policy,
+                exec_policy=active_exec_policy,
                 network_policy=project_policy.network_policy,
                 permission_profile=project_policy.permission_profile,
                 approval_policy=project_policy.approval_policy,

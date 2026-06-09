@@ -79,6 +79,20 @@ class WorkspaceManager:
         workspace.change_current_dir(_required_path(snapshot, "current_dir"))
         return workspace
 
+    def trust_project(self, project_root: Path) -> WorkspaceTrust:
+        """验证项目本地配置后，再把当前 project_root 持久标记为 trusted。"""
+
+        validated_project_root = validate_workspace_path(project_root)
+        candidate_trust = WorkspaceTrust.trusted(validated_project_root)
+        # trust 会启用项目本地配置；必须先验证配置安全，再写入用户侧 trust store。
+        load_project_policy(validated_project_root, candidate_trust)
+        return self.trust_store.mark_trusted(validated_project_root)
+
+    def untrust_project(self, project_root: Path) -> WorkspaceTrust:
+        """把当前 project_root 持久标记为 untrusted，并关闭项目本地配置。"""
+
+        return self.trust_store.mark_untrusted(validate_workspace_path(project_root))
+
 
 def _find_git_root(path: Path) -> Path | None:
     """向上查找最近的 Git 根目录。"""

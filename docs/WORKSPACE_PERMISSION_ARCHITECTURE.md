@@ -89,7 +89,7 @@ Codex-mini 的 workspace 与权限系统要满足这些目标：
 
 尚未落地到代码的部分：
 
-- 没有 trust/untrust 前端入口或完整策略编辑 UI。
+- trust/untrust WebSocket 控制事件和桌面端最小入口已完成第一版；还没有完整策略编辑 UI。
 - 运行时 session allowlist 还没有恢复到 trusted project/user config。
 - workspace resume 已按当前 v2 schema 严格重新验证 `selected_root`、`project_root`、`current_dir` 和 `additional_roots`；permission profile 仍未产品化持久化。
 
@@ -203,7 +203,7 @@ class WorkspaceTrust:
 - 以 canonical git root 或 selected root 作为 trust key。
 - 只有 trusted project 才加载 project-local config、hooks、exec policy。
 - project-local config 有 denylist，不能设置模型 provider、API endpoint、credential path、外部 notifier 之类高风险项。
-- 目前已有用户侧 trust store 和 project-local policy config 白名单读取；后续补 trust/untrust UI、hooks/MCP gate 和策略编辑器。
+- 目前已有用户侧 trust store、project-local policy config 白名单读取，以及 trust/untrust WebSocket + desktop 最小入口；后续补 hooks/MCP gate 和策略编辑器。
 
 ### AdditionalRoot
 
@@ -823,6 +823,8 @@ project-local config denylist：
 交付：
 
 - 用户侧 trust store 第一版。（已完成）
+- WebSocket `trust_workspace` / `untrust_workspace` 控制事件。（已完成第一版）
+- 桌面端 trust level 展示与最小 trust/untrust 入口。（已完成第一版）
 - 默认 `session_only` workspace 不读取 `.codex-mini/config.toml`。（已完成）
 - trusted project 可读取白名单 permission / exec policy config。（已完成第一版）
 - project-local config denylist：model/API/credential/hooks/sandbox 等敏感字段直接拒绝。（已完成第一版）
@@ -835,6 +837,8 @@ project-local config denylist：
 - trusted 项目里的 read-only / approval / exec deny rule 会进入 ToolRunner。（已完成）
 - trusted 项目的敏感配置和过宽 allow rule 返回 `workspace_error`。（已完成）
 - trusted snapshot 在当前 trust store 不可信时恢复失败。（已完成）
+- trust workspace 后会重新加载 project-local policy，并通过 `workspace_policy_changed` 推送给前端。（已完成）
+- invalid project config 会阻止 trust 写入用户侧 trust store。（已完成）
 
 ## 测试矩阵
 
@@ -881,7 +885,7 @@ project-local config denylist：
 第一轮不做：
 
 - 完整 worktree 产品 UI。
-- 完整 project trust UI 和策略编辑器。
+- 完整 project trust 策略编辑器。
 - 复杂 glob policy 编辑器。
 - MCP tool 权限治理。
 - network proxy。

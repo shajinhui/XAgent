@@ -31,6 +31,7 @@ This file is the shared context for future agent conversations in this repo.
 - Resuming a stored session requires the current v2 workspace snapshot from session metadata plus the latest `workspace_policy_changed` event, then strictly revalidates `selected_root`, `project_root`, `current_dir`, and `additional_roots` before rebuilding the tool runner.
 - Project instructions are loaded from `AGENTS.md` files on the path from `project_root` to `current_dir`; when `current_dir` is in an external additional root, runtime does not load external project docs.
 - Project-local policy config is gated by user-side trust: default `session_only` workspaces do not load `.codex-mini/config.toml`; trusted projects can load the current whitelist-only permission and exec policy config, while sensitive keys and broad allow rules are rejected.
+- WebSocket clients can send `trust_workspace` / `untrust_workspace` to explicitly update the user-side trust store for the current project; the runtime reloads workspace policy and emits `workspace_policy_changed`.
 - `run_command` supports an optional `cwd`, but it is only a command working directory inside the current filesystem policy, not a hidden permission expansion.
 - The overall runtime architecture is now modularized, and the first `WorkspaceContext v2` slice is implemented: `selected_root`, `project_root`, `current_dir`, session-only trust, additional root model, and workspace snapshots are the canonical workspace shape. The old `root` / `allowed_roots` payload fields are not emitted and are not accepted during session resume.
 - `security/permissions.py` now contains the first unified filesystem/permission primitives: `FileSystemPolicy`, `PermissionProfile`, `ApprovalPolicy`, and `NetworkPolicy`; `security/exec_policy.py` contains prefix-based command rules and session allow support.
@@ -41,6 +42,7 @@ This file is the shared context for future agent conversations in this repo.
 - Model options are not purely hard-coded: when `MODEL_PROVIDER=deepseek`, the runtime should prefer `${API_BASE:-https://api.deepseek.com}/models` with the generic `API_KEY`; if that fails, fall back only to `MODEL_OPTIONS`. Do not add a provider prefix to model ids returned by `/models`.
 - The desktop client is an Electron/Vue shell for chat, tool timeline, approvals, command output, Markdown rendering, and session navigation.
 - The desktop client has native directory picker entries for opening a workspace, changing current directory, and adding an explicit additional root.
+- The desktop title bar shows the current workspace trust level and provides a minimal trust/untrust control.
 - Basic unit tests exist in `tests/`.
 
 ## Important Files
@@ -114,7 +116,7 @@ This file is the shared context for future agent conversations in this repo.
 3. Reuse the same runtime protocol for an IDE extension later.
    - keep the client thin and let the Python runtime own tool execution
 4. Make the backend more product-ready.
-   - extend the current workspace/filesystem/exec policy into trust UI, persistent project policy, tool scheduling, `edit_file` dry-run, checkpoint/restore, cancellation/backpressure, and persistent suspension state
+   - extend the current workspace/filesystem/exec policy into persistent project policy, tool scheduling, `edit_file` dry-run, checkpoint/restore, cancellation/backpressure, and persistent suspension state
 5. Add integration coverage.
    - desktop client smoke tests, runtime event tests, durable session recovery tests, and macOS sandbox regression tests
 

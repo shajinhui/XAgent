@@ -45,6 +45,28 @@ class WorkspaceTrust:
             project_config_enabled=False,
         )
 
+    @classmethod
+    def trusted(cls, project_root: Path) -> "WorkspaceTrust":
+        """创建用户显式信任后的 trust 状态，允许读取白名单项目配置。"""
+
+        return cls(
+            level=TrustLevel.TRUSTED,
+            trust_key=project_root.resolve().as_posix(),
+            source="user_config",
+            project_config_enabled=True,
+        )
+
+    @classmethod
+    def untrusted(cls, project_root: Path) -> "WorkspaceTrust":
+        """创建用户显式不信任后的 trust 状态，禁止读取项目本地配置。"""
+
+        return cls(
+            level=TrustLevel.UNTRUSTED,
+            trust_key=project_root.resolve().as_posix(),
+            source="user_config",
+            project_config_enabled=False,
+        )
+
     def as_dict(self) -> Dict[str, Any]:
         return {
             "level": self.level.value,

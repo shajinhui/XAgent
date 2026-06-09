@@ -43,19 +43,9 @@ class WorkspaceTrustStore:
 
         level = record.get("level")
         if level == TrustLevel.TRUSTED.value:
-            return WorkspaceTrust(
-                level=TrustLevel.TRUSTED,
-                trust_key=trust_key,
-                source="user_config",
-                project_config_enabled=True,
-            )
+            return WorkspaceTrust.trusted(project_root)
         if level == TrustLevel.UNTRUSTED.value:
-            return WorkspaceTrust(
-                level=TrustLevel.UNTRUSTED,
-                trust_key=trust_key,
-                source="user_config",
-                project_config_enabled=False,
-            )
+            return WorkspaceTrust.untrusted(project_root)
         return WorkspaceTrust.session_only(project_root)
 
     def mark_trusted(self, project_root: Path) -> WorkspaceTrust:

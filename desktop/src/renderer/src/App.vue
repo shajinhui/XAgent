@@ -220,6 +220,32 @@ async function addWorkspaceDirectoryFromDialog(): Promise<void> {
   }
 }
 
+async function trustWorkspace(): Promise<void> {
+  if (!runtime.workspace) return
+  const confirmed = window.confirm(
+    '信任当前项目后，后端会读取 .codex-mini/config.toml 中白名单允许的策略配置。继续吗？'
+  )
+  if (!confirmed) return
+
+  try {
+    await runtime.trustWorkspace()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    chat.addSystemMessage(`信任工作区失败：${message}`)
+  }
+}
+
+async function untrustWorkspace(): Promise<void> {
+  if (!runtime.workspace) return
+
+  try {
+    await runtime.untrustWorkspace()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    chat.addSystemMessage(`取消信任工作区失败：${message}`)
+  }
+}
+
 async function createDefaultConversationWorkspace(): Promise<void> {
   try {
     const workspacePath = await window.api.createDefaultChatDirectory()
@@ -537,6 +563,8 @@ onBeforeUnmount(() => {
         @open-workspace="openWorkspaceFromDialog"
         @change-directory="changeDirectoryFromDialog"
         @add-directory="addWorkspaceDirectoryFromDialog"
+        @trust-workspace="trustWorkspace"
+        @untrust-workspace="untrustWorkspace"
       />
       <MessageList :messages="chat.messages" />
       <div class="composer-zone">

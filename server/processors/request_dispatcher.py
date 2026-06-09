@@ -15,7 +15,7 @@ from server.protocol.events import build_event
 from server.runtime.transcript_events import record_transcript_event
 from server.runtime.websocket_context import WebSocketRuntimeContext
 from server.views.session_summary import list_session_summaries
-from workspace import WorkspaceValidationError
+from workspace import TrustLevel, WorkspaceValidationError
 
 
 class WebSocketRequestDispatcher:
@@ -68,6 +68,12 @@ class WebSocketRequestDispatcher:
             return True
         if packet_type == "add_dir":
             await self._handle_add_dir(packet)
+            return True
+        if packet_type == "trust_workspace":
+            await self._handle_workspace_trust_change(packet, TrustLevel.TRUSTED)
+            return True
+        if packet_type == "untrust_workspace":
+            await self._handle_workspace_trust_change(packet, TrustLevel.UNTRUSTED)
             return True
         if packet_type == "new_session":
             await self._handle_new_session(packet)
@@ -237,6 +243,44 @@ class WebSocketRequestDispatcher:
             previous_workspace=previous_workspace,
             reason="add_dir",
             added_root=added_root,
+        )
+
+    async def _handle_workspace_trust_change(
+        self,
+        packet: Dict[str, Any],
+        level: TrustLevel,
+    ) -> None:
+        """显式切换当前 workspace 信任状态，并刷新权限与工具运行边界。"""
+
+        request_id = _request_id(packet)
+        try:
+            previous_workspace = self.context.change_workspace_trust(level)
+        except WorkspaceValidationError as exc:
+            await self._record_runtime_error(
+                packet,
+                request_id=request_id,
+                message=str(exc),
+                requested_trust_level=level.value,
+            )
+            await self.ws.send_json(
+                build_event(
+                    "workspace_error",
+                    self.context.session_id,
+                    _turn_id(packet),
+                    request_id=request_id,
+                    message=str(exc),
+                    requested_trust_level=level.value,
+                    workspace=self.context.workspace.as_dict(),
+                )
+            )
+            return
+
+        reason = "trust_workspace" if level == TrustLevel.TRUSTED else "untrust_workspace"
+        await self._send_workspace_policy_changed(
+            packet,
+            request_id=request_id,
+            previous_workspace=previous_workspace,
+            reason=reason,
         )
 
     async def _handle_new_session(self, packet: Dict[str, Any]) -> None:
