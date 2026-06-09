@@ -30,6 +30,13 @@ Codex-mini 是一个 Python 版 Codex 类本地 Agent 学习项目，目前正�
 - `tools/` 已拆成 core runtime 与领域工具包，工具 metadata、approval metadata、runner、router 和 catalog 都有独立边界。
 - `session/`、`workspace/`、`security/`、`sandbox/` 已经成为可继续演进的后端域模块。
 
+后续实现必须继续遵守这些架构约束：
+
+- 不写旧协议、旧 schema、过渡 payload 的兼容性胶水代码，除非先明确提出并获得批准的迁移方案。
+- 遵循最小职责原则：一个模块只承担一个清晰职责，新逻辑必须放到拥有该职责的领域模块，不能混进 transport、UI、持久化或 policy 层。
+- 保持边界清晰：request dispatcher、model runtime、session store、workspace policy、desktop presentation 之间通过明确接口协作，不直接依赖彼此内部细节。
+- 不用“先跑起来”的临时耦合替代架构设计；如果一个改动需要跨多个边界，应优先拆成小切片落地。
+
 workspace/permission 已经开始 v2 落地，目前完成了 workspace 身份模型和统一 filesystem policy 的第一片。当前真实状态是：
 
 - `workspace/models.py` 已经拆出 `selected_root`、`project_root`、`current_dir`、`WorkspaceTrust`、`WorkspaceSnapshot` 和 `AdditionalRoot`。

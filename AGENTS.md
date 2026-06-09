@@ -97,6 +97,9 @@ This file is the shared context for future agent conversations in this repo.
 - Do not persist or restore `reasoning_content` into recovered model context. Active in-memory turns may keep assistant `reasoning_content` only when that assistant message has `tool_calls`, because DeepSeek requires it for later tool-call context stitching.
 - Keep the desktop client thin: Python runtime owns tool execution, policy, transcript persistence, and recovery.
 - Keep `server/app.py` thin: protocol shaping, model request config, session-state helpers, request dispatch, turn execution, title generation, transcript helpers, and session views should stay in their dedicated `server/*` modules.
+- Do not add compatibility glue for old protocols, old schemas, or transitional payloads unless the user explicitly approves a migration plan. The project should support the current contract clearly instead of accumulating fallback branches.
+- Follow minimum responsibility boundaries: each module should have one clear reason to change, and new logic should live in the domain that owns it rather than being mixed into transport, UI, persistence, or policy code.
+- Keep architecture boundaries explicit. Avoid "just make it work" coupling where request dispatch, model runtime, session persistence, workspace policy, and desktop presentation know each other's internals.
 - Treat workspace roots as user-selected safety boundaries. Command cwd support must stay inside the active filesystem policy, and extra allowed directories must not be added silently.
 - Treat session resume as a permission-boundary restore path: missing or invalid v2 workspace fields return `workspace_error`; do not add legacy fallback, warning-based repair, or silent migration for old session data.
 - When discussing current workspace/permission behavior, distinguish the implemented v2 slices from the full target design in `docs/WORKSPACE_PERMISSION_ARCHITECTURE.md`.
