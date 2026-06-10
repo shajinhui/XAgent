@@ -77,7 +77,7 @@ This file is the shared context for future agent conversations in this repo.
 - `tools/filesystem/`: read/write/edit file tools
 - `tools/search/grep.py`: code search tool
 - `tools/shell/run_command.py`: sandboxed command tool
-- `tools/network/web_fetch.py`: optional web fetch tool
+- `tools/network/web_fetch.py`: public HTTP/HTTPS web fetch tool
 - `tools/interaction/ask_user.py`: model-initiated clarification tool
 - `security/policy.py`: path and command policy
 - `security/exec_policy.py`: command prefix allow/ask/deny rules and suggestions
@@ -93,7 +93,7 @@ This file is the shared context for future agent conversations in this repo.
 - `read_file` and `grep` are read-only helpers.
 - `write_file` and `edit_file` mutate the real repo and should stay protected.
 - `run_command` is the riskiest path and must keep going through policy + macOS sandbox.
-- `web_fetch` stays opt-in.
+- `web_fetch` can fetch normal public HTTP/HTTPS pages without approval, but must reject localhost, private IPs, non-public resolved addresses, and non-Web protocols.
 - Protected paths such as `.env`, `.git`, `.codex-mini`, `.venv`, and `__pycache__` should not be written; `.env` should not be read by file tools.
 - `.codex-mini/sessions/` contains local runtime state and should be treated as generated data, not product source.
 - Do not persist or restore `reasoning_content` into recovered model context. Active in-memory turns may keep assistant `reasoning_content` only when that assistant message has `tool_calls`, because DeepSeek requires it for later tool-call context stitching.

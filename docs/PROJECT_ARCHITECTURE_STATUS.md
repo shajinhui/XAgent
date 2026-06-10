@@ -424,15 +424,14 @@ append-only JSONL transcript 读写器。
 
 当前状态：
 
-- 默认关闭。
-- 需要设置 `ENABLE_WEB_FETCH=true` 才允许执行。
+- 默认允许抓取普通公网 HTTP/HTTPS 页面，不再要求用户逐次审批。
+- 请求前会拒绝 `localhost`、内网 IP、非公网解析结果和非 Web 协议地址。
 - 使用标准库 `urllib.request` 抓取最多 200KB 内容。
 
 注意事项：
 
 - 暂未接入 URL allowlist/denylist。
-- 暂未做 SSRF 防护。
-- 阶段 2 中应继续保持默认关闭。
+- 已拦截 localhost、内网 IP 和非公网解析结果；更完整的 DNS 重绑定防护后续继续收口。
 
 ### `tools/interaction/ask_user.py`
 

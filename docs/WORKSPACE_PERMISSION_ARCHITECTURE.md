@@ -328,14 +328,14 @@ class NetworkPolicy(StrEnum):
 第一版：
 
 - `run_command` 默认 `RESTRICTED`。
-- `web_fetch` 默认关闭。
-- `web_fetch` 启用后仍要求 approval。
+- `web_fetch` 默认允许普通公网 HTTP/HTTPS 页面，不要求逐次 approval。
+- `web_fetch` 必须拒绝 localhost、内网 IP、非公网解析结果和非 Web 协议地址。
 
 后续：
 
 - domain allowlist / denylist。
-- localhost allowlist。
-- network approval 写入 transcript。
+- localhost / private IP 保持默认拒绝，未来如需开放必须走单独的本地网络策略。
+- network deny / audit 信息写入 transcript。
 - managed proxy 或本地网络审计。
 
 ### ExecPolicy
@@ -449,19 +449,17 @@ tool call
 
 ```text
 tool call
-  -> network policy check
   -> URL validation
+  -> deny localhost / private IP / non-public resolved addresses
   -> optional domain policy
-  -> permission_request
   -> fetch with timeout and byte limit
 ```
 
-第一版保持默认关闭，后续补：
+第一版默认允许普通公网网页抓取，后续补：
 
-- SSRF 防护。
-- localhost / private IP 默认拒绝。
 - domain allowlist。
-- response byte cap。
+- 更完整的 SSRF 防护和 DNS 重绑定防护。
+- 可配置的 response byte cap。
 
 ## Sandbox 生成
 
