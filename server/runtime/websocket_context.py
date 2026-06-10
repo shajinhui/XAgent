@@ -12,9 +12,10 @@ from typing import Any, Dict, List, Literal, cast
 
 from context_manager import ContextManager
 from session import SessionStore, recover_session_messages
+from security.exec_policy import ExecPolicy, ExecPolicyRule
+from server.runtime.session_allowlist import recover_session_allow_rules
 from server.runtime.session_state import SessionRuntimeState, create_websocket_session
 from server.views.session_summary import session_display_messages, summarize_session_record
-from security.exec_policy import ExecPolicy
 from tools.core.catalog import build_default_registry
 from tools.core.registry import ToolRegistry
 from tools.core.runner import ToolRunner, create_tool_context
@@ -203,6 +204,14 @@ class WebSocketRuntimeContext:
         self.session_state = SessionRuntimeState(session_id=session_id)
         self.registry = build_default_registry()
         project_policy = self.workspace.project_policy or default_project_policy()
+        session_allow_rules = recover_session_allow_rules(
+            target_events,
+            self.workspace.as_dict(),
+        )
+        exec_policy = _exec_policy_with_session_allow(
+            project_policy.exec_policy,
+            session_allow_rules,
+        )
         self.runner = ToolRunner(
             self.registry,
             create_tool_context(
@@ -211,7 +220,7 @@ class WebSocketRuntimeContext:
                 project_root=self.workspace.project_root,
                 current_dir=self.workspace.current_dir,
                 additional_roots=self.workspace.additional_roots,
-                exec_policy=project_policy.exec_policy,
+                exec_policy=exec_policy,
                 network_policy=project_policy.network_policy,
                 permission_profile=project_policy.permission_profile,
                 approval_policy=project_policy.approval_policy,
@@ -250,3 +259,14 @@ def _workspace_snapshot_from_session(
             raise WorkspaceValidationError("workspace_policy_changed missing workspace snapshot")
         snapshot = event_workspace
     return snapshot
+
+
+def _exec_policy_with_session_allow(
+    base_policy: ExecPolicy,
+    session_allow_rules: tuple[ExecPolicyRule, ...],
+) -> ExecPolicy:
+    """把 transcript 恢复出的 session allow 追加到当前项目命令策略。"""
+
+    if not session_allow_rules:
+        return base_policy
+    return ExecPolicy((*base_policy.rules, *session_allow_rules))

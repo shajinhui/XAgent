@@ -64,7 +64,7 @@ Codex-mini 的 workspace 与权限系统要满足这些目标：
 - `ExecPolicy` 已有第一版独立模型，支持 prefix allow/ask/deny、session allowlist 和 dangerous prefix suggestion denylist。
 - 命令策略已有 trust-gated project-local rule 文件加载第一片。
 - CLI 路径没有完整 approve/deny/retry 闭环。
-- session resume 已恢复 workspace policy、additional dirs 和 current dir；permission mode 仍未产品化持久化。
+- session resume 已恢复 workspace policy、additional dirs、current dir，以及同 workspace snapshot 下的 session allowlist；permission mode 仍未产品化持久化。
 - `AGENTS.md` 已按 project root 到 cwd 分层加载；project-local policy config 已接 trust gate 第一片，后续补 UI 和持久化编辑体验。
 
 ## 当前落地状态
@@ -86,11 +86,12 @@ Codex-mini 的 workspace 与权限系统要满足这些目标：
 - `server/processors/request_dispatcher.py` 已支持 `change_directory`、`add_dir` 和 `workspace_policy_changed`。
 - `workspace/instructions.py` 已支持从 `project_root` 到 `current_dir` 分层加载 `AGENTS.md`，并避免 external additional root 越界加载。
 - desktop TitleBar 已有打开 workspace、切换 current dir 和加入 additional root 的原生目录选择入口。
+- `permission_decision` 会把批准时的 workspace snapshot 写入 transcript，resume 只恢复与当前 workspace snapshot 完全一致的 session allow prefix。
 
 尚未落地到代码的部分：
 
 - trust/untrust WebSocket 控制事件和桌面端最小入口已完成第一版；还没有完整策略编辑 UI。
-- 运行时 session allowlist 还没有恢复到 trusted project/user config。
+- 运行时 session allowlist 还没有持久化到 trusted project/user config。
 - workspace resume 已按当前 v2 schema 严格重新验证 `selected_root`、`project_root`、`current_dir` 和 `additional_roots`；permission profile 仍未产品化持久化。
 
 下一阶段落地时，应把本文档当作目标架构，把 `docs/PROJECT_ARCHITECTURE_STATUS.md` 当作当前代码事实。两者不一致时，优先以代码事实为准，再同步更新文档。
@@ -758,6 +759,7 @@ project-local config denylist：
 
 - 已完成第一版实现和单元测试覆盖。
 - WebSocket `permission_decision` 支持 `scope=session` 与 `prefix_rule`，前端在存在 `suggested_prefix_rule` 时展示本会话同类命令批准入口。
+- session resume 会恢复同 workspace snapshot 下的 session allow prefix，workspace 变化后不继承旧批准。
 - 已有 trust-gated project-local exec policy 配置文件第一片，但还没有跨 session 持久运行时批准规则。
 
 ### PR5: Workspace Protocol and Desktop UI

@@ -1054,6 +1054,135 @@ category = "publish_blocked"
             self.assertIn("root instructions", context.history.messages[0]["content"])
             self.assertIn("nested instructions", context.history.messages[0]["content"])
 
+    async def test_resume_session_restores_matching_session_allow_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            root.mkdir()
+            seed_context = WebSocketRuntimeContext.create(root, "system")
+            session_id = "allow-session"
+            workspace_snapshot = seed_context.workspace.as_dict()
+            seed_context.session_store.create_session(
+                session_id=session_id,
+                metadata={"workspace": workspace_snapshot},
+            )
+            seed_context.session_store.append_event(
+                session_id,
+                "permission_decision",
+                {
+                    "turn_id": "turn-1",
+                    "request_id": "call-1",
+                    "tool": "run_command",
+                    "approved": True,
+                    "scope": "session",
+                    "prefix_rule": ["npm", "run", "test"],
+                    "workspace": workspace_snapshot,
+                },
+            )
+
+            context = WebSocketRuntimeContext.create(root, "system")
+            ws = FakeWebSocket()
+            dispatcher = WebSocketRequestDispatcher(ws, context)
+
+            handled = await dispatcher.handle_control_packet(
+                {"type": "resume_session", "session_id": session_id, "request_id": "resume-allow"}
+            )
+            decision = context.runner.ctx.policy.check_command("npm run test -- --watch=false")
+
+            self.assertTrue(handled)
+            self.assertEqual(ws.sent[0]["type"], "session_resumed")
+            self.assertTrue(decision.allowed)
+            self.assertFalse(decision.approval_required)
+            self.assertEqual(decision.matched_prefix_rule, ("npm", "run", "test"))
+
+    async def test_resume_session_does_not_restore_allow_prefix_after_workspace_change(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            nested = root / "pkg"
+            root.mkdir()
+            nested.mkdir()
+            seed_context = WebSocketRuntimeContext.create(root, "system")
+            session_id = "changed-workspace-allow-session"
+            initial_workspace = seed_context.workspace.as_dict()
+            seed_context.session_store.create_session(
+                session_id=session_id,
+                metadata={"workspace": initial_workspace},
+            )
+            seed_context.session_store.append_event(
+                session_id,
+                "permission_decision",
+                {
+                    "turn_id": "turn-1",
+                    "request_id": "call-1",
+                    "tool": "run_command",
+                    "approved": True,
+                    "scope": "session",
+                    "prefix_rule": ["npm", "run", "test"],
+                    "workspace": initial_workspace,
+                },
+            )
+            seed_context.workspace.change_current_dir(nested)
+            seed_context.session_store.append_event(
+                session_id,
+                "workspace_policy_changed",
+                {
+                    "turn_id": "system",
+                    "workspace": seed_context.workspace.as_dict(),
+                },
+            )
+
+            context = WebSocketRuntimeContext.create(root, "system")
+            ws = FakeWebSocket()
+            dispatcher = WebSocketRequestDispatcher(ws, context)
+
+            handled = await dispatcher.handle_control_packet(
+                {"type": "resume_session", "session_id": session_id, "request_id": "resume-mismatch"}
+            )
+            decision = context.runner.ctx.policy.check_command("npm run test -- --watch=false")
+
+            self.assertTrue(handled)
+            self.assertEqual(ws.sent[0]["type"], "session_resumed")
+            self.assertTrue(decision.allowed)
+            self.assertTrue(decision.approval_required)
+            self.assertIsNone(decision.matched_prefix_rule)
+
+    async def test_resume_session_rejects_session_allow_without_workspace_snapshot(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            root.mkdir()
+            context = WebSocketRuntimeContext.create(root, "system")
+            session_id = "missing-allow-workspace"
+            context.session_store.create_session(
+                session_id=session_id,
+                metadata={"workspace": context.workspace.as_dict()},
+            )
+            context.session_store.append_event(
+                session_id,
+                "permission_decision",
+                {
+                    "turn_id": "turn-1",
+                    "request_id": "call-1",
+                    "tool": "run_command",
+                    "approved": True,
+                    "scope": "session",
+                    "prefix_rule": ["npm", "run", "test"],
+                },
+            )
+            ws = FakeWebSocket()
+            dispatcher = WebSocketRequestDispatcher(ws, context)
+
+            handled = await dispatcher.handle_control_packet(
+                {"type": "resume_session", "session_id": session_id, "request_id": "resume-missing"}
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(ws.sent[0]["type"], "workspace_error")
+            self.assertEqual(ws.sent[0]["requested_session_id"], session_id)
+            self.assertIn("permission_decision 缺少 workspace snapshot", ws.sent[0]["message"])
+
     async def test_resume_session_rejects_legacy_workspace_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"

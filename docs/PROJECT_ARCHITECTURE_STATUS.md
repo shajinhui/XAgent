@@ -50,6 +50,7 @@ workspace/permission 已经开始 v2 落地，目前完成了 workspace 身份�
 - `resume_session` 只接受当前 v2 workspace snapshot：从 session metadata 和最后一次 `workspace_policy_changed` 事件取 `selected_root`、`project_root`、`current_dir`、`additional_roots`，缺失字段、旧字段或失效路径都会返回 `workspace_error`。
 - `workspace/instructions.py` 会从 `project_root` 到 `current_dir` 分层加载 `AGENTS.md`，且不会越过项目根去读取 external additional root 的项目文档。
 - 命令策略已拆到 `security/exec_policy.py`，支持 prefix allow/ask/deny、session allow、危险命令拒绝和 prefix suggestion。
+- `permission_decision` transcript 事件会记录批准时的 workspace snapshot；恢复 session 时只会恢复与当前 workspace snapshot 完全一致的 session allow prefix。
 - `workspace/trust.py` 与 `workspace/project_config.py` 已提供第一版 trust gate：默认 `session_only` 不加载 `.codex-mini/config.toml`，trusted project 才能加载白名单 permission / exec policy 配置，敏感字段和过宽 allow rule 会被拒绝。
 - WebSocket runtime 已提供 `trust_workspace` / `untrust_workspace` 控制事件，显式更新用户侧 trust store，刷新 workspace policy，并通过 `workspace_policy_changed` 通知前端。
 - 桌面标题栏已展示当前 workspace trust level，并提供最小 trust/untrust 操作入口。
@@ -58,7 +59,7 @@ workspace/permission 已经开始 v2 落地，目前完成了 workspace 身份�
 因此后续讨论时应区分两句话：
 
 - “项目模块架构已经更新”是已完成事实。
-- “workspace/permission v2 完整实现”不是当前事实，目前完成了 PR1、PR2、PR3、PR4、PR5、PR6 和 PR7 第二片，还差 project-local policy 持久化/编辑、session allowlist 恢复边界和更细 sandbox 回归。
+- “workspace/permission v2 完整实现”不是当前事实，目前完成了 PR1、PR2、PR3、PR4、PR5、PR6 和 PR7 第二片，以及 session allowlist 恢复边界第一片；还差 project-local policy 持久化/编辑和更细 sandbox 回归。
 
 ## 顶层目录结构
 
@@ -495,6 +496,7 @@ prefix exec policy 和命令启发式。
 - `python -c`、shell wrapper、`node -e`、destructive 命令不会建议持久 prefix rule。
 - `ApprovalPolicy.NEVER` 下需要 ask 的命令会降级为 deny。
 - WebSocket `permission_decision` 支持 `scope=session` 与 `prefix_rule`，批准后把匹配的 suggested prefix 加入当前会话 allow rules。
+- resume 会从 transcript 恢复同 workspace snapshot 下的 session allow prefix；workspace 后续变化时不继承旧批准。
 
 当前不足：
 
@@ -852,7 +854,7 @@ final_answer
 - 配置化安全策略。
 - `edit_file` dry-run。
 - WebSocket 端到端集成测试。
-- `WorkspaceContext v2` 后续：workspace policy 编辑和运行时 allowlist 持久化。
+- `WorkspaceContext v2` 后续：workspace policy 编辑和跨 session 运行时 allowlist 持久化。
 - 桌面客户端 smoke test。
 - macOS 沙箱隔离回归测试。
 - cancellation/backpressure。
@@ -863,7 +865,7 @@ final_answer
 建议按以下顺序继续收口，优先把“本地 runtime + 桌面客户端”这条线打通：
 
 1. 补 project trust 产品化闭环。
-   - trust/untrust 控制事件和桌面端状态展示已完成第一版；下一步补运行时 session allowlist 恢复边界和策略编辑入口。
+   - trust/untrust 控制事件和桌面端状态展示已完成第一版；下一步补策略编辑入口和跨 session allowlist 持久化。
 2. 继续收口桌面客户端壳。
    - UI 已展示 selected root/current dir 并提供 `change_directory`、`add_dir` 入口；下一步补 permission profile 展示和更完整错误状态。
 3. 做集成测试和回归测试。

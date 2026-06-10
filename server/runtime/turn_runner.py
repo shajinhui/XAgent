@@ -465,6 +465,7 @@ async def run_turn(
                         "feedback": user_feedback,
                         "scope": permission_decision.scope,
                         "prefix_rule": list(remembered_prefix) if remembered_prefix else None,
+                        "workspace": turn_context.workspace.as_dict(),
                     },
                 )
                 await ws.send_json(

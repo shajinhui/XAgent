@@ -34,6 +34,7 @@ This file is the shared context for future agent conversations in this repo.
 - WebSocket clients can send `trust_workspace` / `untrust_workspace` to explicitly update the user-side trust store for the current project; the runtime reloads workspace policy and emits `workspace_policy_changed`.
 - `run_command` supports an optional `cwd`, but it is only a command working directory inside the current filesystem policy, not a hidden permission expansion.
 - The overall runtime architecture is now modularized, and the first `WorkspaceContext v2` slice is implemented: `selected_root`, `project_root`, `current_dir`, session-only trust, additional root model, and workspace snapshots are the canonical workspace shape. The old `root` / `allowed_roots` payload fields are not emitted and are not accepted during session resume.
+- Session-scoped command allow rules are written through `permission_decision` transcript events with a workspace snapshot, and resume only restores those rules when the saved permission workspace exactly matches the restored workspace snapshot.
 - `security/permissions.py` now contains the first unified filesystem/permission primitives: `FileSystemPolicy`, `PermissionProfile`, `ApprovalPolicy`, and `NetworkPolicy`; `security/exec_policy.py` contains prefix-based command rules and session allow support.
 - `docs/WORKSPACE_PERMISSION_ARCHITECTURE.md` is the target design for the remaining permission work: project docs layering, project-trust config loading, project-local policy persistence, and sandbox hardening.
 - WebSocket clients can create a new session, list existing sessions, resume a stored session, and request a conversation title generated from the first user question.
@@ -57,6 +58,7 @@ This file is the shared context for future agent conversations in this repo.
 - `server/runtime/turn_runner.py`: streaming model turn loop, tool calls, permission wait, and tool-result events
 - `server/runtime/websocket_context.py`: mutable WebSocket runtime context for workspace/session/store/registry state
 - `server/runtime/transcript_events.py`: transcript event helpers and denied-tool result shaping
+- `server/runtime/session_allowlist.py`: recover session-scoped command allow rules from permission transcript events
 - `server/processors/request_dispatcher.py`: WebSocket control-packet dispatcher
 - `server/processors/title_processor.py`: low-cost conversation title generation
 - `server/views/session_summary.py`: stored-session summary and display-message projection
