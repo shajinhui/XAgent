@@ -43,7 +43,7 @@ This file is the shared context for future agent conversations in this repo.
 - Model options are not purely hard-coded: when `MODEL_PROVIDER=deepseek`, the runtime should prefer `${API_BASE:-https://api.deepseek.com}/models` with the generic `API_KEY`; if that fails, fall back only to `MODEL_OPTIONS`. Do not add a provider prefix to model ids returned by `/models`.
 - The desktop client is an Electron/Vue shell for chat, tool timeline, approvals, command output, Markdown rendering, and session navigation.
 - The desktop client has native directory picker entries for opening a workspace, changing current directory, and adding an explicit additional root.
-- The desktop title bar shows the current workspace trust level and provides a minimal trust/untrust control.
+- The desktop title bar shows current workspace trust and permission policy summary, and provides minimal trust/untrust controls.
 - Basic unit tests exist in `tests/`.
 
 ## Important Files

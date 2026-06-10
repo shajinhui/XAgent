@@ -40,6 +40,15 @@ export type RuntimeAdditionalRoot = {
   source: 'user' | 'session' | 'config'
 }
 
+export type RuntimeWorkspacePolicy = {
+  source: 'defaults' | 'project_config'
+  config_path: string | null
+  permission_profile: 'read_only' | 'workspace_write' | 'danger_no_sandbox'
+  approval_policy: 'ask-before-mutating' | 'never'
+  network_policy: 'restricted' | 'enabled'
+  exec_rule_count: number
+}
+
 export type RuntimeWorkspace = {
   selected_root: string
   project_root: string
@@ -48,6 +57,7 @@ export type RuntimeWorkspace = {
   git_root: string | null
   trust: RuntimeWorkspaceTrust
   additional_roots: RuntimeAdditionalRoot[]
+  policy?: RuntimeWorkspacePolicy
 }
 
 export type RuntimeWorkspaceProject = RuntimeWorkspace & {

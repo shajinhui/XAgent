@@ -42,9 +42,9 @@ const workspaceLabel = computed(() => props.workspace?.display_name || '打开�
 
 const workspaceTrustLabel = computed(() => {
   const level = props.workspace?.trust.level
-  if (level === 'trusted') return 'trusted'
-  if (level === 'untrusted') return 'untrusted'
-  return 'session only'
+  if (level === 'trusted') return '已信任'
+  if (level === 'untrusted') return '未信任'
+  return '本会话'
 })
 
 const isWorkspaceTrusted = computed(() => props.workspace?.trust.level === 'trusted')
@@ -62,6 +62,28 @@ const currentDirLabel = computed(() => {
   return current
 })
 
+const permissionProfileLabel = computed(() => {
+  const profile = props.workspace?.policy?.permission_profile
+  if (profile === 'read_only') return '只读'
+  if (profile === 'danger_no_sandbox') return '无沙箱'
+  return '工作区可写'
+})
+
+const policySourceLabel = computed(() => {
+  const source = props.workspace?.policy?.source
+  return source === 'project_config' ? '项目配置' : '默认策略'
+})
+
+const networkPolicyLabel = computed(() => {
+  const network = props.workspace?.policy?.network_policy
+  return network === 'enabled' ? '网络开启' : '网络受限'
+})
+
+const approvalPolicyLabel = computed(() => {
+  const approval = props.workspace?.policy?.approval_policy
+  return approval === 'never' ? '禁止询问' : '变更前确认'
+})
+
 const workspaceTitle = computed(() => {
   if (!props.workspace) return '打开工作区'
   const roots = props.workspace.additional_roots
@@ -71,6 +93,9 @@ const workspaceTitle = computed(() => {
     `selected: ${props.workspace.selected_root}`,
     `current: ${props.workspace.current_dir}`,
     `trust: ${props.workspace.trust.level}`,
+    `profile: ${props.workspace.policy?.permission_profile || 'workspace_write'}`,
+    `approval: ${props.workspace.policy?.approval_policy || 'ask-before-mutating'}`,
+    `network: ${props.workspace.policy?.network_policy || 'restricted'}`,
     roots ? `additional:\n${roots}` : ''
   ]
     .filter(Boolean)
@@ -121,9 +146,15 @@ function trimTrailingSeparators(path: string): string {
         </svg>
         <span class="workspace-text">
           <span>{{ workspaceLabel }}</span>
-          <small v-if="props.workspace">{{ currentDirLabel }} · {{ workspaceTrustLabel }}</small>
+          <small v-if="props.workspace">
+            {{ currentDirLabel }} · {{ permissionProfileLabel }} · {{ workspaceTrustLabel }}
+          </small>
         </span>
       </button>
+      <div v-if="props.workspace" class="policy-chip" :title="workspaceTitle">
+        <span>{{ policySourceLabel }}</span>
+        <small>{{ approvalPolicyLabel }} · {{ networkPolicyLabel }}</small>
+      </div>
       <button
         v-if="props.workspace"
         class="icon-button"

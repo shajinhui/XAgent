@@ -30,8 +30,64 @@ const suggestedPrefixRule = computed(() => {
 })
 const suggestedPrefixLabel = computed(() => suggestedPrefixRule.value.join(' '))
 
+const permissionFacts = computed(() =>
+  [
+    fact('目录', metadataText('cwd') || relativeCurrentDir.value),
+    fact('Profile', profileLabel(metadataText('permission_profile'))),
+    fact('审批', approvalLabel(metadataText('approval_policy'))),
+    fact('网络', networkLabel(metadataText('network_policy'))),
+    fact('类别', metadataText('category')),
+    fact('命令', metadataText('command'))
+  ].filter((item): item is { label: string; value: string } => Boolean(item?.value))
+)
+
+const relativeCurrentDir = computed(() => {
+  const current = metadataText('current_dir')
+  const selected = metadataText('selected_root')
+  if (!current) return ''
+  if (!selected) return current
+
+  const root = trimTrailingSeparators(selected)
+  const path = trimTrailingSeparators(current)
+  if (path === root) return '.'
+  if (path.startsWith(`${root}/`)) return path.slice(root.length + 1)
+  return path
+})
+
 function submitFeedback(): void {
   emit('deny', feedback.value.trim() || undefined)
+}
+
+function fact(label: string, value: string): { label: string; value: string } | null {
+  return value ? { label, value } : null
+}
+
+function metadataText(key: string): string {
+  const value = props.request.metadata[key]
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function profileLabel(value: string): string {
+  if (value === 'read_only') return '只读'
+  if (value === 'workspace_write') return '工作区可写'
+  if (value === 'danger_no_sandbox') return '无沙箱'
+  return value
+}
+
+function approvalLabel(value: string): string {
+  if (value === 'ask-before-mutating') return '变更前确认'
+  if (value === 'never') return '禁止询问'
+  return value
+}
+
+function networkLabel(value: string): string {
+  if (value === 'restricted') return '受限'
+  if (value === 'enabled') return '开启'
+  return value
+}
+
+function trimTrailingSeparators(path: string): string {
+  return path.replace(/[\\/]+$/, '')
 }
 </script>
 
@@ -43,6 +99,13 @@ function submitFeedback(): void {
     </header>
 
     <pre v-if="formattedArguments" class="permission-command">{{ formattedArguments }}</pre>
+
+    <dl v-if="permissionFacts.length" class="permission-facts">
+      <div v-for="item in permissionFacts" :key="item.label">
+        <dt>{{ item.label }}</dt>
+        <dd>{{ item.value }}</dd>
+      </div>
+    </dl>
 
     <div v-if="!showDenyFeedback" class="permission-options" aria-label="权限选择">
       <button class="permission-option" type="button" @click="emit('approve', 'once')">

@@ -177,6 +177,10 @@ class ToolRegistryTests(unittest.TestCase):
             self.assertEqual(result.metadata["permission_action"], "ask")
             self.assertEqual(result.metadata["category"], "command_approval")
             self.assertEqual(result.metadata["suggested_prefix_rule"], ["ruff", "check"])
+            self.assertEqual(result.metadata["permission_profile"], "workspace_write")
+            self.assertEqual(result.metadata["approval_policy"], "ask-before-mutating")
+            self.assertEqual(result.metadata["network_policy"], "restricted")
+            self.assertEqual(result.metadata["current_dir"], Path(tmp).resolve().as_posix())
 
     def test_ask_user_returns_clarification_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -346,6 +350,8 @@ class ToolRegistryTests(unittest.TestCase):
 
             self.assertFalse(result.ok)
             self.assertEqual(result.metadata["permission_action"], "ask")
+            self.assertEqual(result.metadata["permission_profile"], "workspace_write")
+            self.assertEqual(result.metadata["current_dir"], root.resolve().as_posix())
             self.assertFalse((root / "created.txt").exists())
 
     def test_mutating_file_tool_runs_after_approval(self) -> None:

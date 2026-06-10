@@ -177,6 +177,39 @@ textarea:disabled {
   font-weight: 600;
 }
 
+.policy-chip {
+  min-width: 118px;
+  height: 34px;
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  border-radius: 14px;
+  padding: 0 10px;
+  color: #c7d2de;
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.policy-chip span,
+.policy-chip small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.policy-chip span {
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 700;
+}
+
+.policy-chip small {
+  color: #8c96a3;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 600;
+}
+
 .title-copy {
   min-width: 0;
   display: inline-flex;
@@ -1427,6 +1460,41 @@ svg {
   white-space: pre-wrap;
 }
 
+.permission-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.permission-facts div {
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: rgba(148, 163, 184, 0.06);
+}
+
+.permission-facts dt {
+  margin: 0 0 3px;
+  color: #7dd3fc;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.permission-facts dd {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 0;
+  color: #d1d5db;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .permission-options {
   display: grid;
   gap: 8px;
@@ -1667,6 +1735,10 @@ svg {
   .permission-option strong,
   .clarification-option strong {
     white-space: normal;
+  }
+
+  .permission-facts {
+    grid-template-columns: 1fr;
   }
 
   .runtime-controls {

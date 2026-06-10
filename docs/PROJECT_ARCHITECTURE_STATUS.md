@@ -654,6 +654,7 @@ FastAPI WebSocket transport 和请求分发入口。
 - 收到 `permission_decision` 且 `approved=true` 后，会用 `approved=True` 重试原工具调用。
 - 收到 `permission_decision` 且 `approved=false` 后，会返回结构化 deny 结果并把结果回填给模型。
 - 收到 `clarification_response` 后，会把用户回答作为 `ask_user` 的工具结果回填给模型。
+- `permission_request` metadata 会携带当前 `current_dir`、`permission_profile`、`approval_policy` 和 `network_policy`，前端权限弹窗可直接展示当前安全边界。
 - 收到 `resume_session` 后，会清理 session 挂起状态和对应熔断计数。
 - WebSocket 路径已经用 LiteLLM `stream=True` 推送真实 `assistant_token`。
 - WebSocket 路径会把用户消息、assistant 消息、工具结果、权限决定、挂起/恢复和标题事件写入 transcript。
@@ -683,6 +684,7 @@ Electron + Vue + TypeScript 本地客户端。
 - Markdown 渲染使用 `markdown-it` + `DOMPurify`，并保持工具结果 UI 与 assistant 正文分离。
 - 前端类型定义覆盖 runtime event 和 client packet。
 - 前端 runtime store 已能保存 `workspace` 状态，并发送 `open_workspace`、`change_directory`、`add_dir` packet；原生目录选择 UI 已接入 TitleBar 操作区。
+- TitleBar 已展示 workspace trust、permission profile、策略来源、审批策略和网络策略摘要；权限弹窗已展示 cwd/profile/command/prefix suggestion。
 
 当前不足：
 
@@ -867,6 +869,6 @@ final_answer
 1. 补 project trust 产品化闭环。
    - trust/untrust 控制事件和桌面端状态展示已完成第一版；下一步补策略编辑入口和跨 session allowlist 持久化。
 2. 继续收口桌面客户端壳。
-   - UI 已展示 selected root/current dir 并提供 `change_directory`、`add_dir` 入口；下一步补 permission profile 展示和更完整错误状态。
+   - UI 已展示 selected root/current dir、permission profile 和策略摘要，并提供 `change_directory`、`add_dir` 入口；下一步补更完整错误状态和权限模式切换入口。
 3. 做集成测试和回归测试。
    - WebSocket workspace/permission tests、desktop smoke test、macOS sandbox policy tests。

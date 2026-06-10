@@ -163,6 +163,11 @@ def _command_metadata(
         "category": category or decision.category,
         "command": command,
         "cwd": _display_cwd(ctx, cwd),
+        "selected_root": ctx.selected_root.as_posix(),
+        "current_dir": ctx.current_dir.as_posix(),
+        "permission_profile": ctx.permission_profile.value,
+        "approval_policy": ctx.approval_policy.value,
+        "network_policy": ctx.network_policy.value,
     }
     if decision.suggested_prefix_rule:
         metadata["suggested_prefix_rule"] = list(decision.suggested_prefix_rule)

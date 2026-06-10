@@ -102,6 +102,7 @@ class ToolRunner:
                         "permission_action": "ask",
                         "category": "tool_approval",
                         "tool": name,
+                        **_permission_context_metadata(self.ctx),
                     },
                 )
 
@@ -181,3 +182,15 @@ def _filesystem_policy_for_profile(
         current_dir=current_dir,
         additional_roots=additional_roots,
     )
+
+
+def _permission_context_metadata(ctx: ToolExecutionContext) -> dict[str, str]:
+    """生成前端权限弹窗需要展示的当前运行边界。"""
+
+    return {
+        "selected_root": ctx.selected_root.as_posix(),
+        "current_dir": ctx.current_dir.as_posix(),
+        "permission_profile": ctx.permission_profile.value,
+        "approval_policy": ctx.approval_policy.value,
+        "network_policy": ctx.network_policy.value,
+    }

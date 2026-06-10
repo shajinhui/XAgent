@@ -86,6 +86,7 @@ Codex-mini 的 workspace 与权限系统要满足这些目标：
 - `server/processors/request_dispatcher.py` 已支持 `change_directory`、`add_dir` 和 `workspace_policy_changed`。
 - `workspace/instructions.py` 已支持从 `project_root` 到 `current_dir` 分层加载 `AGENTS.md`，并避免 external additional root 越界加载。
 - desktop TitleBar 已有打开 workspace、切换 current dir 和加入 additional root 的原生目录选择入口。
+- desktop TitleBar 已展示 permission profile / approval / network 摘要，权限弹窗已展示 cwd/profile/command/prefix suggestion。
 - `permission_decision` 会把批准时的 workspace snapshot 写入 transcript，resume 只恢复与当前 workspace snapshot 完全一致的 session allow prefix。
 
 尚未落地到代码的部分：
@@ -776,8 +777,8 @@ project-local config denylist：
 - `change_directory`。（已完成第一版）
 - `add_dir`。（已完成第一版）
 - `workspace_policy_changed`。（已完成第一版）
-- TitleBar 显示 selected root/current dir，并提供切换目录和加入额外目录入口。（已完成第一版）
-- 权限弹窗展示 profile、cwd、command、prefix suggestion。（prefix suggestion 已完成；profile/cwd 还需继续补齐）
+- TitleBar 显示 selected root/current dir、trust 和 permission policy 摘要，并提供切换目录和加入额外目录入口。（已完成第一版）
+- 权限弹窗展示 profile、cwd、command、prefix suggestion。（已完成第一版）
 
 验收：
 
