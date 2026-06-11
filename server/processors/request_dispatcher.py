@@ -10,6 +10,8 @@ from __future__ import annotations
 import uuid
 from typing import Any, Dict
 
+from memory.store import MemoryStore
+from memory.summarizer import extract_task_state, summarize_session
 from server.processors.title_processor import generate_conversation_title, normalize_title_messages
 from server.protocol.events import build_event
 from server.runtime.transcript_events import record_transcript_event
@@ -95,6 +97,15 @@ class WebSocketRequestDispatcher:
             return True
         if packet_type == "cancel_turn":
             await self._handle_cancel_turn(packet)
+            return True
+        if packet_type == "summarize_session":
+            await self._handle_summarize_session(packet)
+            return True
+        if packet_type == "list_memory":
+            await self._handle_list_memory(packet)
+            return True
+        if packet_type == "forget_memory":
+            await self._handle_forget_memory(packet)
             return True
 
         await self._send_error(
@@ -589,6 +600,135 @@ class WebSocketRequestDispatcher:
             packet,
             request_id=_request_id(packet),
             message="no active turn to cancel",
+        )
+
+    async def _handle_summarize_session(self, packet: Dict[str, Any]) -> None:
+        """生成当前会话摘要并保存到 memory。"""
+
+        request_id = _request_id(packet)
+        if not self.context.session_persisted:
+            await self._send_error(
+                packet,
+                request_id=request_id,
+                message="session not persisted yet",
+            )
+            return
+
+        memory_dir = self.context.workspace.project_root / ".codex-mini" / "memory"
+        memory_store = MemoryStore(memory_dir)
+
+        writer = self.context.session_store.writer(self.context.session_id)
+        events = writer.load()
+
+        summary = summarize_session(events)
+        task_state = extract_task_state(events)
+
+        memory_entry = memory_store.save_session_memory(
+            self.context.session_id,
+            summary,
+            {"task_state": task_state}
+        )
+
+        await self.ws.send_json(
+            build_event(
+                "session_summarized",
+                self.context.session_id,
+                _turn_id(packet),
+                request_id=request_id,
+                summary=summary,
+                memory_id=memory_entry.memory_id,
+            )
+        )
+
+    async def _handle_list_memory(self, packet: Dict[str, Any]) -> None:
+        """列出当前 workspace 的 memory。"""
+
+        request_id = _request_id(packet)
+        memory_type = packet.get("memory_type", "session")
+
+        memory_dir = self.context.workspace.project_root / ".codex-mini" / "memory"
+        memory_store = MemoryStore(memory_dir)
+
+        if memory_type == "session":
+            memories = memory_store.list_session_memories()
+        elif memory_type == "task":
+            memories = memory_store.list_task_memories()
+        else:
+            await self._send_error(
+                packet,
+                request_id=request_id,
+                message=f"unsupported memory_type: {memory_type}",
+            )
+            return
+
+        await self.ws.send_json(
+            build_event(
+                "memory_list",
+                self.context.session_id,
+                _turn_id(packet),
+                request_id=request_id,
+                memory_type=memory_type,
+                memories=[
+                    {
+                        "memory_id": m.memory_id,
+                        "memory_type": m.memory_type.value,
+                        "content": m.content,
+                        "created_at": m.created_at,
+                        "updated_at": m.updated_at,
+                        "metadata": m.metadata,
+                    }
+                    for m in memories
+                ],
+            )
+        )
+
+    async def _handle_forget_memory(self, packet: Dict[str, Any]) -> None:
+        """删除指定 memory。"""
+
+        request_id = _request_id(packet)
+        memory_type = packet.get("memory_type", "session")
+        memory_id = str(packet.get("memory_id", "")).strip()
+
+        if not memory_id:
+            await self._send_error(
+                packet,
+                request_id=request_id,
+                message="memory_id is required",
+            )
+            return
+
+        from memory.models import MemoryType
+        memory_dir = self.context.workspace.project_root / ".codex-mini" / "memory"
+        memory_store = MemoryStore(memory_dir)
+
+        try:
+            mem_type = MemoryType(memory_type)
+        except ValueError:
+            await self._send_error(
+                packet,
+                request_id=request_id,
+                message=f"unsupported memory_type: {memory_type}",
+            )
+            return
+
+        deleted = memory_store.delete_memory(mem_type, memory_id)
+        if not deleted:
+            await self._send_error(
+                packet,
+                request_id=request_id,
+                message=f"memory not found: {memory_id}",
+            )
+            return
+
+        await self.ws.send_json(
+            build_event(
+                "memory_deleted",
+                self.context.session_id,
+                _turn_id(packet),
+                request_id=request_id,
+                memory_type=memory_type,
+                memory_id=memory_id,
+            )
         )
 
     async def _send_workspace_policy_changed(
