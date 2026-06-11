@@ -110,7 +110,26 @@ class ContextManager:
                     memories.append(f"# 项目规则\n\n{project_mem.content}")
                     remaining_tokens -= tokens
 
-            # 3. Task Memory (当前任务)
+            # 3. 最近的历史会话摘要（跨会话上下文）
+            if remaining_tokens > 0:
+                recent_sessions = memory_store.list_session_memories()[:3]  # 最近3个
+                if recent_sessions:
+                    session_summaries = []
+                    for sess_mem in recent_sessions:
+                        # 跳过当前会话自己
+                        if session_id and sess_mem.memory_id == session_id:
+                            continue
+                        summary_tokens = self._estimate_tokens(sess_mem.content)
+                        if summary_tokens <= remaining_tokens:
+                            session_summaries.append(sess_mem.content)
+                            remaining_tokens -= summary_tokens
+                        if len(session_summaries) >= 2:  # 最多2个历史会话
+                            break
+
+                    if session_summaries:
+                        memories.append(f"# 最近会话上下文\n\n" + "\n\n---\n\n".join(session_summaries))
+
+            # 4. Task Memory (当前任务)
             if session_id:
                 task_mem = memory_store.load_task_memory(session_id)
                 if task_mem and remaining_tokens > 0:
