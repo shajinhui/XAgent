@@ -282,6 +282,7 @@ class WebSocketRuntimeContext:
         try:
             from pathlib import Path
 
+            from memory.indexer import update_memory_index
             from memory.learner import extract_user_preferences
             from memory.store import MemoryStore
             from memory.summarizer import extract_task_state, summarize_session
@@ -310,6 +311,9 @@ class WebSocketRuntimeContext:
                     new_content = "# 用户偏好\n\n" + "\n".join(f"- {p}" for p in preferences)
 
                 user_store.save_user_memory(new_content)
+
+            # 3. 更新 MEMORY.md 索引
+            update_memory_index(memory_dir)
         except Exception:
             pass  # 静默失败，不影响正常流程
 

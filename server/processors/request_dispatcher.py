@@ -110,6 +110,9 @@ class WebSocketRequestDispatcher:
         if packet_type == "remember_preference":
             await self._handle_remember_preference(packet)
             return True
+        if packet_type == "search_memory":
+            await self._handle_search_memory(packet)
+            return True
 
         await self._send_error(
             packet,
@@ -771,6 +774,45 @@ class WebSocketRequestDispatcher:
                 request_id=request_id,
                 content=content,
                 memory_id=entry.memory_id,
+            )
+        )
+
+    async def _handle_search_memory(self, packet: Dict[str, Any]) -> None:
+        """搜索 memory 内容。"""
+
+        request_id = _request_id(packet)
+        query = str(packet.get("query", "")).strip()
+
+        if not query:
+            await self._send_error(
+                packet,
+                request_id=request_id,
+                message="search query is required",
+            )
+            return
+
+        from memory.search import search_memory, search_memory_index
+
+        memory_dir = self.context.workspace.project_root / ".codex-mini" / "memory"
+
+        # 搜索索引
+        index_results = search_memory_index(memory_dir, query)
+
+        # 搜索详细内容
+        detail_results = search_memory(memory_dir, query, limit=5)
+
+        await self.ws.send_json(
+            build_event(
+                "memory_search_results",
+                self.context.session_id,
+                _turn_id(packet),
+                request_id=request_id,
+                query=query,
+                index_results=index_results,
+                detail_results=[
+                    {"memory_id": mem_id, "line": line, "line_number": line_num}
+                    for mem_id, line, line_num in detail_results
+                ],
             )
         )
 
