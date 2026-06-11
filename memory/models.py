@@ -12,6 +12,8 @@ class MemoryType(str, Enum):
 
     SESSION = "session"  # 会话摘要
     TASK = "task"  # 任务状态
+    USER = "user"  # 用户偏好
+    PROJECT = "project"  # 项目规则
 
 
 @dataclass(frozen=True)

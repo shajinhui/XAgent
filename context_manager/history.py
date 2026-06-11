@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 
@@ -47,6 +48,85 @@ class ContextManager:
             self._messages[0] = {"role": "system", "content": system_prompt}
             return
         self._messages.insert(0, {"role": "system", "content": system_prompt})
+
+    def inject_memory(
+        self,
+        *,
+        session_id: str | None = None,
+        project_root: Path | None = None,
+        max_tokens: int = 2000,
+    ) -> None:
+        """注入 Memory 到上下文（在 system prompt 后）。"""
+        memories = self._load_memories(session_id, project_root, max_tokens)
+        if not memories:
+            return
+
+        # 找到 system prompt 位置
+        insert_pos = 1 if self._messages and self._messages[0].get("role") == "system" else 0
+
+        # 按优先级注入
+        for mem_content in memories:
+            self._messages.insert(insert_pos, {"role": "system", "content": mem_content})
+            insert_pos += 1
+
+    def _load_memories(
+        self,
+        session_id: str | None,
+        project_root: Path | None,
+        max_tokens: int,
+    ) -> List[str]:
+        """加载并优先级排序 memory。"""
+        try:
+            from memory.store import MemoryStore
+
+            memories = []
+            remaining_tokens = max_tokens
+
+            # 1. User Memory (全局，最高优先级)
+            user_memory_dir = Path.home() / ".codex-mini" / "memory"
+            if user_memory_dir.exists():
+                user_store = MemoryStore(user_memory_dir)
+                user_mem = user_store.load_user_memory()
+                if user_mem and remaining_tokens > 0:
+                    tokens = self._estimate_tokens(user_mem.content)
+                    if tokens <= min(1000, remaining_tokens):
+                        memories.append(f"# 用户偏好\n\n{user_mem.content}")
+                        remaining_tokens -= tokens
+
+            if not project_root:
+                return memories
+
+            # 2. Project Memory (项目规则)
+            memory_dir = project_root / ".codex-mini" / "memory"
+            if not memory_dir.exists():
+                return memories
+
+            memory_store = MemoryStore(memory_dir)
+
+            project_mem = memory_store.load_project_memory(project_root.name)
+            if project_mem and remaining_tokens > 0:
+                tokens = self._estimate_tokens(project_mem.content)
+                if tokens <= min(800, remaining_tokens):
+                    memories.append(f"# 项目规则\n\n{project_mem.content}")
+                    remaining_tokens -= tokens
+
+            # 3. Task Memory (当前任务)
+            if session_id:
+                task_mem = memory_store.load_task_memory(session_id)
+                if task_mem and remaining_tokens > 0:
+                    tokens = self._estimate_tokens(task_mem.content)
+                    if tokens <= min(500, remaining_tokens):
+                        memories.append(f"# 当前任务\n\n{task_mem.content}")
+                        remaining_tokens -= tokens
+
+            return memories
+        except Exception:
+            return []
+
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """粗略估算 token 数量（1 token ≈ 4 字符）。"""
+        return len(text) // 4
 
     def append_user_message(self, content: str) -> None:
         """追加一条用户消息。"""

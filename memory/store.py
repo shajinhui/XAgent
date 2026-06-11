@@ -17,8 +17,12 @@ class MemoryStore:
         self.data_dir = data_dir.resolve()
         self.sessions_dir = self.data_dir / "sessions"
         self.tasks_dir = self.data_dir / "tasks"
+        self.users_dir = self.data_dir / "users"
+        self.projects_dir = self.data_dir / "projects"
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         self.tasks_dir.mkdir(parents=True, exist_ok=True)
+        self.users_dir.mkdir(parents=True, exist_ok=True)
+        self.projects_dir.mkdir(parents=True, exist_ok=True)
 
     def save_session_memory(self, session_id: str, content: str, metadata: Dict | None = None) -> MemoryEntry:
         """保存会话摘要。"""
@@ -35,6 +39,22 @@ class MemoryStore:
     def load_task_memory(self, task_id: str) -> MemoryEntry | None:
         """加载任务状态。"""
         return self._load_memory(MemoryType.TASK, task_id)
+
+    def save_user_memory(self, content: str, metadata: Dict | None = None) -> MemoryEntry:
+        """保存用户偏好（全局）。"""
+        return self._save_memory(MemoryType.USER, "preferences", content, metadata)
+
+    def load_user_memory(self) -> MemoryEntry | None:
+        """加载用户偏好。"""
+        return self._load_memory(MemoryType.USER, "preferences")
+
+    def save_project_memory(self, project_id: str, content: str, metadata: Dict | None = None) -> MemoryEntry:
+        """保存项目规则。"""
+        return self._save_memory(MemoryType.PROJECT, project_id, content, metadata)
+
+    def load_project_memory(self, project_id: str) -> MemoryEntry | None:
+        """加载项目规则。"""
+        return self._load_memory(MemoryType.PROJECT, project_id)
 
     def list_session_memories(self) -> List[MemoryEntry]:
         """列出所有会话摘要。"""
@@ -100,7 +120,12 @@ class MemoryStore:
         )
 
     def _list_memories(self, memory_type: MemoryType) -> List[MemoryEntry]:
-        target_dir = self.sessions_dir if memory_type == MemoryType.SESSION else self.tasks_dir
+        target_dir = {
+            MemoryType.SESSION: self.sessions_dir,
+            MemoryType.TASK: self.tasks_dir,
+            MemoryType.USER: self.users_dir,
+            MemoryType.PROJECT: self.projects_dir,
+        }[memory_type]
         entries = []
         for path in target_dir.glob("*.json"):
             entry = self._load_memory(memory_type, path.stem)
@@ -109,5 +134,10 @@ class MemoryStore:
         return sorted(entries, key=lambda e: e.updated_at, reverse=True)
 
     def _get_path(self, memory_type: MemoryType, memory_id: str) -> Path:
-        target_dir = self.sessions_dir if memory_type == MemoryType.SESSION else self.tasks_dir
+        target_dir = {
+            MemoryType.SESSION: self.sessions_dir,
+            MemoryType.TASK: self.tasks_dir,
+            MemoryType.USER: self.users_dir,
+            MemoryType.PROJECT: self.projects_dir,
+        }[memory_type]
         return target_dir / f"{memory_id}.json"

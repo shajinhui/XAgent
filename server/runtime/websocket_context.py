@@ -95,6 +95,11 @@ class WebSocketRuntimeContext:
         """切到新的空内存会话，并返回切换前的 session_state。"""
 
         previous_state = self.session_state.as_dict()
+
+        # 自动生成上一个会话的摘要
+        if self.session_persisted and self.session_id:
+            self._auto_summarize_session(self.session_id)
+
         self.session_id, self.session_state, self.registry, self.runner, self.history = (
             create_websocket_session(self.workspace, self.system_prompt)
         )
@@ -271,6 +276,25 @@ class WebSocketRuntimeContext:
             session_display_messages(target_events),
             summarize_session_record(target_record, target_events),
         )
+
+    def _auto_summarize_session(self, session_id: str) -> None:
+        """自动生成会话摘要并保存到 memory。"""
+        try:
+            from memory.store import MemoryStore
+            from memory.summarizer import extract_task_state, summarize_session
+
+            memory_dir = self.workspace.project_root / ".codex-mini" / "memory"
+            memory_store = MemoryStore(memory_dir)
+
+            writer = self.session_store.writer(session_id)
+            events = writer.load()
+
+            summary = summarize_session(events)
+            task_state = extract_task_state(events)
+
+            memory_store.save_session_memory(session_id, summary, {"task_state": task_state})
+        except Exception:
+            pass  # 静默失败，不影响正常流程
 
 
 def _require_session_store(workspace: WorkspaceContext) -> SessionStore:

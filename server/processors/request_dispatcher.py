@@ -107,6 +107,9 @@ class WebSocketRequestDispatcher:
         if packet_type == "forget_memory":
             await self._handle_forget_memory(packet)
             return True
+        if packet_type == "remember_preference":
+            await self._handle_remember_preference(packet)
+            return True
 
         await self._send_error(
             packet,
@@ -728,6 +731,46 @@ class WebSocketRequestDispatcher:
                 request_id=request_id,
                 memory_type=memory_type,
                 memory_id=memory_id,
+            )
+        )
+
+    async def _handle_remember_preference(self, packet: Dict[str, Any]) -> None:
+        """记录用户偏好到 User Memory。"""
+
+        request_id = _request_id(packet)
+        content = str(packet.get("content", "")).strip()
+
+        if not content:
+            await self._send_error(
+                packet,
+                request_id=request_id,
+                message="preference content is required",
+            )
+            return
+
+        from pathlib import Path
+
+        # User Memory 存储在用户主目录
+        user_memory_dir = Path.home() / ".codex-mini" / "memory"
+        memory_store = MemoryStore(user_memory_dir)
+
+        # 加载现有偏好，追加新内容
+        existing = memory_store.load_user_memory()
+        if existing:
+            new_content = f"{existing.content}\n- {content}"
+        else:
+            new_content = f"# 用户偏好\n\n- {content}"
+
+        entry = memory_store.save_user_memory(new_content)
+
+        await self.ws.send_json(
+            build_event(
+                "preference_remembered",
+                self.context.session_id,
+                _turn_id(packet),
+                request_id=request_id,
+                content=content,
+                memory_id=entry.memory_id,
             )
         )
 

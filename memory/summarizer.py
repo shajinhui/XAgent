@@ -7,8 +7,19 @@ from typing import Dict, List
 from session.models import TranscriptEvent
 
 
-def summarize_session(events: List[TranscriptEvent]) -> str:
-    """从 transcript 事件生成会话摘要。"""
+def summarize_session(events: List[TranscriptEvent], use_model: bool = False) -> str:
+    """从 transcript 事件生成会话摘要。
+
+    Args:
+        events: transcript 事件列表
+        use_model: 是否使用小模型生成摘要（更准确但更慢）
+    """
+    if use_model:
+        return _summarize_with_model(events)
+    return _summarize_with_rules(events)
+
+
+def _summarize_with_rules(events: List[TranscriptEvent]) -> str:
 
     user_messages = []
     assistant_messages = []
@@ -60,6 +71,45 @@ def summarize_session(events: List[TranscriptEvent]) -> str:
         summary_parts.append(f"## 执行命令\n\n" + "\n".join(f"- {cmd}" for cmd in commands_run[:10]))
 
     return "\n\n".join(summary_parts) if summary_parts else "空会话"
+
+
+def _summarize_with_model(events: List[TranscriptEvent]) -> str:
+    """用小模型生成摘要。"""
+    try:
+        import litellm
+
+        # 构造简化的对话文本
+        text_parts = []
+        for event in events[:50]:  # 只取前50个事件
+            if event.type == "user_message":
+                content = event.payload.get("content", "")
+                if content:
+                    text_parts.append(f"用户: {content[:200]}")
+            elif event.type == "assistant_message":
+                content = event.payload.get("content", "")
+                if content:
+                    text_parts.append(f"助手: {content[:200]}")
+
+        if not text_parts:
+            return "空会话"
+
+        conversation_text = "\n".join(text_parts[:20])  # 最多20轮
+
+        response = litellm.completion(
+            model="claude-3-haiku-20240307",
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"用3-5个要点总结这次对话的目标、做了什么、遇到什么问题、下一步计划：\n\n{conversation_text}",
+                }
+            ],
+            max_tokens=300,
+            timeout=10,
+        )
+        return response.choices[0].message.content or "摘要生成失败"
+    except Exception:
+        # 失败时回退到规则方法
+        return _summarize_with_rules(events)
 
 
 def extract_task_state(events: List[TranscriptEvent]) -> Dict:
