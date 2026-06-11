@@ -7,7 +7,7 @@ from typing import Any
 
 from context import EnvironmentContext, ModelContext, PermissionsContext, UserContext
 from context_manager import ContextManager
-from tools.core.context import TurnDiffTracker
+from session.turn_diff import TurnDiffTracker
 from tools.core.registry import ToolRegistry
 from tools.core.runner import ToolRunner
 from workspace import WorkspaceContext
@@ -66,6 +66,7 @@ class TurnContext:
         )
 
     def as_dict(self) -> dict[str, Any]:
+        changed_files = self.diff_tracker.get_changed_files()
         return {
             "session_id": self.session_id,
             "turn_id": self.turn_id,
@@ -74,5 +75,5 @@ class TurnContext:
             "permissions": self.permissions.as_dict(),
             "model": self.model.as_dict(),
             "user": self.user.as_dict(),
-            "diff": {"touched_paths": list(self.diff_tracker.touched_paths)},
+            "changed_files": list(changed_files.keys()),
         }

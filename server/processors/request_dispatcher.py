@@ -113,6 +113,9 @@ class WebSocketRequestDispatcher:
         if packet_type == "search_memory":
             await self._handle_search_memory(packet)
             return True
+        if packet_type == "undo_file":
+            await self._handle_undo_file(packet)
+            return True
 
         await self._send_error(
             packet,
@@ -814,6 +817,29 @@ class WebSocketRequestDispatcher:
                     for mem_id, line, line_num in detail_results
                 ],
             )
+        )
+
+    async def _handle_undo_file(self, packet: Dict[str, Any]) -> None:
+        """撤销文件修改。"""
+
+        request_id = _request_id(packet)
+        file_path = str(packet.get("file_path", "")).strip()
+
+        if not file_path:
+            await self._send_error(
+                packet,
+                request_id=request_id,
+                message="file_path is required",
+            )
+            return
+
+        # 注意：这里需要从当前 turn_context 获取 diff_tracker
+        # 但 WebSocket 层没有 turn_context，需要考虑如何持久化
+        # 暂时返回错误，提示功能未完全实现
+        await self._send_error(
+            packet,
+            request_id=request_id,
+            message="undo_file not yet implemented: turn context not accessible",
         )
 
     async def _send_workspace_policy_changed(
