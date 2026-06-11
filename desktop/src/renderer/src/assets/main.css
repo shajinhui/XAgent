@@ -63,6 +63,14 @@
   --markdown-code-bg: rgba(229, 231, 235, 0.1);
   --markdown-code-border: rgba(229, 231, 235, 0.12);
   --markdown-code-block-bg: rgba(229, 231, 235, 0.055);
+  --syntax-attribute: #8bd3dd;
+  --syntax-comment: #8b94a3;
+  --syntax-keyword: #d8b4fe;
+  --syntax-literal: #93c5fd;
+  --syntax-number: #86efac;
+  --syntax-string: #9bdc9a;
+  --syntax-title: #e5e7eb;
+  --syntax-type: #f3c17a;
   --markdown-table-bg: rgba(229, 231, 235, 0.035);
   --markdown-table-header-bg: rgba(229, 231, 235, 0.07);
   --markdown-table-border: rgba(229, 231, 235, 0.1);
@@ -157,7 +165,15 @@
   --markdown-code-text: #24292f;
   --markdown-code-bg: #f1f2f4;
   --markdown-code-border: #e1e4e8;
-  --markdown-code-block-bg: #f6f7f8;
+  --markdown-code-block-bg: #eeeeee;
+  --syntax-attribute: #0f766e;
+  --syntax-comment: #8a94a3;
+  --syntax-keyword: #b629b7;
+  --syntax-literal: #2563eb;
+  --syntax-number: #3f9b48;
+  --syntax-string: #4a9f50;
+  --syntax-title: #1f2937;
+  --syntax-type: #a56400;
   --markdown-table-bg: #ffffff;
   --markdown-table-header-bg: #f4f4f5;
   --markdown-table-border: #e5e5e5;
@@ -254,14 +270,17 @@ textarea:disabled {
   border: 0;
   border-radius: 0;
   background: var(--app-bg);
+  padding-left: 48px;
   transition:
     margin-left 0.22s ease,
-    width 0.22s ease;
+    width 0.22s ease,
+    padding-left 0.22s ease;
 }
 
 .app-screen.sidebar-open .chat-window {
   width: calc(100% - var(--sidebar-width));
   margin-left: var(--sidebar-width);
+  padding-left: 0;
 }
 
 .app-screen.sidebar-resizing,
@@ -1175,6 +1194,14 @@ textarea:disabled {
   scroll-behavior: smooth;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) transparent;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.transcript > * {
+  width: 100%;
+  max-width: 920px;
 }
 
 .transcript::-webkit-scrollbar {
@@ -1264,7 +1291,7 @@ textarea:disabled {
 
 .message-user .bubble {
   background: var(--message-user-bg);
-  border-color: var(--surface-subtle);
+  border-color: transparent;
 }
 
 .message-assistant .bubble {
@@ -1421,15 +1448,13 @@ textarea:disabled {
 }
 
 .markdown-body code {
-  border: 1px solid var(--markdown-code-border);
+  border: 0;
   border-radius: 5px;
   padding: 1px 4px;
   color: var(--markdown-code-text);
   background: var(--markdown-code-bg);
-  font-family:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
-  font-size: 0.88em;
-  font-weight: 500;
+  font-family: 'SF Mono', Menlo, Monaco, 'Courier New', monospace;
+  font-size: 0.92em;
 }
 
 .code-block {
@@ -1437,15 +1462,15 @@ textarea:disabled {
   max-width: 100%;
   overflow: hidden;
   margin: 10px 0 16px;
-  border: 1px solid var(--markdown-code-border);
+  border: 0;
   border-radius: 8px;
   background: var(--markdown-code-block-bg);
 }
 
 .code-block-actions {
   position: absolute;
-  top: 7px;
-  right: 7px;
+  top: 11px;
+  right: 13px;
   z-index: 1;
   display: inline-flex;
   align-items: center;
@@ -1456,8 +1481,12 @@ textarea:disabled {
 }
 
 .code-language {
+  position: absolute;
+  top: 17px;
+  left: 15px;
+  z-index: 1;
   min-width: 0;
-  max-width: 90px;
+  max-width: calc(100% - 72px);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1517,7 +1546,7 @@ textarea:disabled {
   margin: 0;
   border: 0;
   border-radius: 0;
-  padding: 13px 64px 13px 14px;
+  padding: 48px 16px 18px;
   background: transparent;
 }
 
@@ -1532,6 +1561,56 @@ textarea:disabled {
   line-height: 1.45;
   font-weight: 400;
   white-space: pre;
+}
+
+.markdown-body pre code.hljs {
+  color: var(--markdown-code-text);
+  background: transparent;
+}
+
+.markdown-body .hljs-keyword,
+.markdown-body .hljs-selector-tag,
+.markdown-body .hljs-built_in,
+.markdown-body .hljs-name {
+  color: var(--syntax-keyword);
+  font-weight: 500;
+}
+
+.markdown-body .hljs-string,
+.markdown-body .hljs-regexp {
+  color: var(--syntax-string);
+}
+
+.markdown-body .hljs-type,
+.markdown-body .hljs-class .hljs-title,
+.markdown-body .hljs-title.class_ {
+  color: var(--syntax-type);
+  font-weight: 500;
+}
+
+.markdown-body .hljs-number,
+.markdown-body .hljs-literal {
+  color: var(--syntax-number);
+}
+
+.markdown-body .hljs-title,
+.markdown-body .hljs-function,
+.markdown-body .hljs-section {
+  color: var(--syntax-title);
+}
+
+.markdown-body .hljs-comment,
+.markdown-body .hljs-quote {
+  color: var(--syntax-comment);
+  font-style: normal;
+}
+
+.markdown-body .hljs-attr,
+.markdown-body .hljs-attribute,
+.markdown-body .hljs-variable,
+.markdown-body .hljs-template-variable,
+.markdown-body .hljs-meta {
+  color: var(--syntax-attribute);
 }
 
 .markdown-body a {

@@ -12,7 +12,7 @@ import {
   Terminal,
   TriangleAlert,
   Wrench
-} from 'lucide-vue-next'
+} from '@lucide/vue'
 import { renderMarkdown } from '@renderer/services/markdown'
 import { useChatStore } from '@renderer/stores/chat'
 import type { ActivityStepKind, ChatMessage } from '@renderer/stores/chat'

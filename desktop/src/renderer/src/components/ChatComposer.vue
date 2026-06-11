@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
-import { ChevronDown, Paperclip, SendHorizontal, Shield } from 'lucide-vue-next'
+import { ChevronDown, Paperclip, SendHorizontal, Shield } from '@lucide/vue'
 import IconButton from '@renderer/components/ui/IconButton.vue'
 import type { RuntimePermissionMode } from '@renderer/types/runtimeEvents'
 

@@ -19,7 +19,7 @@ import {
   Settings as SettingsIcon,
   Shield,
   Trash2
-} from 'lucide-vue-next'
+} from '@lucide/vue'
 import ChatComposer from '@renderer/components/ChatComposer.vue'
 import ClarificationDialog from '@renderer/components/ClarificationDialog.vue'
 import MessageList from '@renderer/components/MessageList.vue'

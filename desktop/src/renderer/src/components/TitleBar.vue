@@ -11,7 +11,7 @@ import {
   ShieldCheck,
   ShieldMinus,
   Unlink
-} from 'lucide-vue-next'
+} from '@lucide/vue'
 import IconButton from '@renderer/components/ui/IconButton.vue'
 import type { RuntimeConnectionStatus } from '@renderer/services/runtimeSocket'
 import type { RuntimeWorkspace } from '@renderer/types/runtimeEvents'
