@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 
 from security.exec_policy import CommandDecision, ExecPolicy, ExecPolicyRule
@@ -77,7 +78,19 @@ class SecurityPolicy:
     def check_command(self, command: str, approved: bool = False) -> CommandDecision:
         """判断命令是允许、拒绝，还是需要用户确认。"""
 
-        decision = self.exec_policy.decide(command, approved=approved)
+        decision = self.exec_policy.decide(self._policy_command(command), approved=approved)
+        if (
+            decision.approval_required
+            and self.approval_policy == ApprovalPolicy.AUTO
+            and decision.matched_prefix_rule is None
+        ):
+            return CommandDecision(
+                action="allow",
+                category="auto_approved_command",
+                reason=decision.reason or "当前权限模式自动批准命令",
+                suggested_prefix_rule=decision.suggested_prefix_rule,
+                approval_required=False,
+            )
         if decision.requires_approval and self.approval_policy == ApprovalPolicy.NEVER:
             return decision.deny("approval_unavailable", "当前 approval policy 禁止请求用户批准")
         return decision
@@ -85,7 +98,31 @@ class SecurityPolicy:
     def allow_prefix_for_session(self, prefix_rule: tuple[str, ...]) -> None:
         """把用户批准的命令前缀加入当前会话的 allow rules。"""
 
-        self.exec_policy = ExecPolicy((*self.exec_policy.rules, ExecPolicyRule.allow(*prefix_rule)))
+        self.exec_policy = ExecPolicy(
+            (*self.exec_policy.rules, ExecPolicyRule.allow(*prefix_rule)),
+            protect_paths=self.exec_policy.protect_paths,
+        )
+
+    def _policy_command(self, command: str) -> str:
+        """把已验证的 `cd <dir> && command` 还原成真正需要判断的命令。"""
+
+        leading, separator, rest = command.partition("&&")
+        if not separator or not rest.strip():
+            return command
+
+        try:
+            leading_argv = tuple(shlex.split(leading))
+        except ValueError:
+            return command
+
+        if len(leading_argv) != 2 or leading_argv[0] != "cd":
+            return command
+
+        try:
+            self.resolve_command_cwd(leading_argv[1])
+        except (PermissionError, ValueError):
+            return command
+        return rest.strip()
 
 
 def _default_filesystem_policy(

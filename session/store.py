@@ -24,6 +24,8 @@ class SessionStore:
         self.db_path = self.data_dir / "index.sqlite"
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.transcript_dir.mkdir(parents=True, exist_ok=True)
+        self._update_cache: Dict[str, Dict[str, Any]] = {}  # 索引更新缓存
+        self._writers: Dict[str, TranscriptWriter] = {}
         self._init_db()
 
     def create_session(
@@ -93,11 +95,44 @@ class SessionStore:
         event_type: str,
         payload: Dict[str, Any] | None = None,
     ) -> TranscriptEvent:
-        """追加 transcript event，并同步更新索引中的更新时间和最近 turn。"""
+        """追加 transcript event，并延迟批量更新索引的更新时间和最近 turn。"""
 
-        record = self.get_session(session_id)
-        event = self.writer(session_id).append(session_id, event_type, payload or {})
+        self._get_session(session_id, flush_pending=False)
+        event = self.writer(session_id).append(
+            session_id,
+            event_type,
+            payload or {},
+            force_flush=_should_flush_transcript_event(event_type),
+        )
         last_turn_id = _extract_turn_id(event.payload)
+
+        # 缓存索引更新，每 5 次事件才真正写入数据库
+        cache_key = session_id
+        if cache_key not in self._update_cache:
+            self._update_cache[cache_key] = {"count": 0, "timestamp": event.timestamp, "turn_id": last_turn_id}
+
+        cache = self._update_cache[cache_key]
+        cache["count"] += 1
+        cache["timestamp"] = event.timestamp
+        if last_turn_id:
+            cache["turn_id"] = last_turn_id
+
+        # 批量更新阈值或关键事件时立即刷新
+        should_flush = (
+            cache["count"] >= 5
+            or last_turn_id is not None
+            or event_type in {"turn_started", "final_answer", "session_suspended"}
+        )
+        if should_flush:
+            self._flush_index_update(session_id)
+
+        return event
+
+    def _flush_index_update(self, session_id: str) -> None:
+        """刷新索引更新到数据库。"""
+        cache = self._update_cache.get(session_id)
+        if not cache or cache["count"] == 0:
+            return
 
         with self._connect() as conn:
             conn.execute(
@@ -107,12 +142,20 @@ class SessionStore:
                     last_turn_id = COALESCE(?, last_turn_id)
                 WHERE session_id = ?
                 """,
-                (event.timestamp, last_turn_id, record.session_id),
+                (cache["timestamp"], cache["turn_id"], session_id),
             )
-        return event
+        del self._update_cache[session_id]
 
     def get_session(self, session_id: str) -> SessionRecord:
         """读取单个 session record；不存在时抛出 KeyError。"""
+
+        return self._get_session(session_id, flush_pending=True)
+
+    def _get_session(self, session_id: str, *, flush_pending: bool) -> SessionRecord:
+        """读取 session record，可选择先刷新待写索引。"""
+
+        if flush_pending:
+            self._flush_index_update(session_id)
 
         with self._connect() as conn:
             row = conn.execute(
@@ -148,6 +191,7 @@ class SessionStore:
         避免启动历史列表时扫描大量空 transcript。
         """
 
+        self._flush_all_index_updates()
         query = """
             SELECT
                 session_id,
@@ -176,6 +220,10 @@ class SessionStore:
         """删除 session 索引记录和对应 transcript 文件。"""
 
         record = self.get_session(session_id)
+        writer = self._writers.pop(session_id, None)
+        if writer is not None:
+            writer.flush()
+        self._update_cache.pop(session_id, None)
 
         with self._connect() as conn:
             conn.execute(
@@ -203,7 +251,15 @@ class SessionStore:
     def writer(self, session_id: str) -> TranscriptWriter:
         """返回指定 session 对应的 transcript writer。"""
 
-        return TranscriptWriter(self._transcript_path(session_id))
+        if session_id not in self._writers:
+            self._writers[session_id] = TranscriptWriter(self._transcript_path(session_id))
+        return self._writers[session_id]
+
+    def _flush_all_index_updates(self) -> None:
+        """刷新所有延迟索引更新，确保列表查询看到最新状态。"""
+
+        for session_id in list(self._update_cache):
+            self._flush_index_update(session_id)
 
     def _transcript_path(self, session_id: str) -> Path:
         """把 session_id 映射到安全的 transcript 文件路径。"""
@@ -262,6 +318,12 @@ def _extract_turn_id(payload: Dict[str, Any]) -> str | None:
     if normalized_turn_id in {"", "system", "title"}:
         return None
     return normalized_turn_id
+
+
+def _should_flush_transcript_event(event_type: str) -> bool:
+    """除高频 token 外，transcript 事件要立即落盘以支持跨连接恢复。"""
+
+    return event_type != "assistant_token"
 
 
 def _row_to_record(row: sqlite3.Row) -> SessionRecord:

@@ -44,6 +44,51 @@ class ExecPolicyTests(unittest.TestCase):
         self.assertEqual(decision.category, "safe_read_only")
         self.assertFalse(decision.approval_required)
 
+    def test_safe_find_sort_pipeline_allows_without_approval(self) -> None:
+        policy = ExecPolicy()
+
+        decision = policy.decide("find . -maxdepth 1 -not -name '.' -not -name '.git' | sort")
+
+        self.assertTrue(decision.allowed)
+        self.assertEqual(decision.category, "safe_read_only")
+        self.assertFalse(decision.approval_required)
+
+    def test_safe_find_sort_unique_pipeline_allows_without_approval(self) -> None:
+        policy = ExecPolicy()
+
+        decision = policy.decide("find . -maxdepth 1 -type f | sort -u")
+
+        self.assertTrue(decision.allowed)
+        self.assertEqual(decision.category, "safe_read_only")
+        self.assertFalse(decision.approval_required)
+
+    def test_safe_git_log_allows_without_approval(self) -> None:
+        policy = ExecPolicy()
+
+        decision = policy.decide("git log --oneline -10")
+
+        self.assertTrue(decision.allowed)
+        self.assertEqual(decision.category, "safe_read_only")
+        self.assertFalse(decision.approval_required)
+
+    def test_safe_git_status_allows_without_approval(self) -> None:
+        policy = ExecPolicy()
+
+        decision = policy.decide("git status --short")
+
+        self.assertTrue(decision.allowed)
+        self.assertEqual(decision.category, "safe_read_only")
+        self.assertFalse(decision.approval_required)
+
+    def test_safe_git_diff_allows_without_approval(self) -> None:
+        policy = ExecPolicy()
+
+        decision = policy.decide("git diff --stat")
+
+        self.assertTrue(decision.allowed)
+        self.assertEqual(decision.category, "safe_read_only")
+        self.assertFalse(decision.approval_required)
+
     def test_compound_read_only_command_still_requires_approval(self) -> None:
         policy = ExecPolicy()
 
@@ -52,6 +97,60 @@ class ExecPolicyTests(unittest.TestCase):
         self.assertTrue(decision.requires_approval)
         self.assertIsNone(decision.suggested_prefix_rule)
 
+    def test_find_with_delete_still_requires_approval(self) -> None:
+        policy = ExecPolicy()
+
+        decision = policy.decide("find . -delete")
+
+        self.assertTrue(decision.allowed)
+        self.assertTrue(decision.approval_required)
+        self.assertNotEqual(decision.category, "safe_read_only")
+
+    def test_find_pipeline_with_parent_path_still_requires_approval(self) -> None:
+        policy = ExecPolicy()
+
+        decision = policy.decide("find .. -maxdepth 1 | sort")
+
+        self.assertTrue(decision.allowed)
+        self.assertTrue(decision.approval_required)
+        self.assertNotEqual(decision.category, "safe_read_only")
+
+    def test_find_with_exec_still_requires_approval(self) -> None:
+        policy = ExecPolicy()
+
+        decision = policy.decide("find . -exec rm {} \\;")
+
+        self.assertTrue(decision.allowed)
+        self.assertTrue(decision.approval_required)
+        self.assertNotEqual(decision.category, "safe_read_only")
+
+    def test_find_pipeline_with_redirect_still_requires_approval(self) -> None:
+        policy = ExecPolicy()
+
+        decision = policy.decide("find . -maxdepth 1 | sort > files.txt")
+
+        self.assertTrue(decision.allowed)
+        self.assertTrue(decision.approval_required)
+        self.assertNotEqual(decision.category, "safe_read_only")
+
+    def test_git_checkout_still_requires_approval(self) -> None:
+        policy = ExecPolicy()
+
+        decision = policy.decide("git checkout main")
+
+        self.assertTrue(decision.allowed)
+        self.assertTrue(decision.approval_required)
+        self.assertNotEqual(decision.category, "safe_read_only")
+
+    def test_git_output_still_requires_approval(self) -> None:
+        policy = ExecPolicy()
+
+        decision = policy.decide("git log --output=log.txt")
+
+        self.assertTrue(decision.allowed)
+        self.assertTrue(decision.approval_required)
+        self.assertNotEqual(decision.category, "safe_read_only")
+
     def test_read_only_command_with_external_path_still_requires_approval(self) -> None:
         policy = ExecPolicy()
 
@@ -59,6 +158,15 @@ class ExecPolicyTests(unittest.TestCase):
 
         self.assertTrue(decision.requires_approval)
         self.assertIsNone(decision.suggested_prefix_rule)
+
+    def test_unprotected_exec_policy_does_not_deny_protected_path_reference(self) -> None:
+        policy = ExecPolicy(protect_paths=False)
+
+        decision = policy.decide("cat .env")
+
+        self.assertTrue(decision.allowed)
+        self.assertEqual(decision.category, "safe_read_only")
+        self.assertFalse(decision.approval_required)
 
     def test_common_mutating_runtime_command_still_requires_approval(self) -> None:
         policy = ExecPolicy()

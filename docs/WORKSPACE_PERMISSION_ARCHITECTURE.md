@@ -52,10 +52,11 @@ Codex-mini 的 workspace 与权限系统要满足这些目标：
 - `add_dir` 可以显式加入 read/write additional root，并立即刷新工具执行的 filesystem policy。
 - `run_command.cwd` 可以在 active filesystem policy 的可写目录中执行。
 - `FileSystemPolicy`、`PermissionProfile`、`ApprovalPolicy` 和 `NetworkPolicy` 已有第一版。
+- `PermissionMode` 已有第一版，支持全局 runtime permission mode：`request_approval`、`auto_approve`、`full_access` 和 `custom`。
 - read/write/edit/grep/run_command cwd 已统一走 `current_dir + filesystem policy`。
 - `.env` 默认禁止 read/write，`.codex-mini` 默认禁止 write。
-- `write_file`、`edit_file`、`run_command` 会先走 WebSocket permission request。
-- `run_command` 批准后进入 macOS Seatbelt。
+- 默认 `request_approval` 下，`write_file`、`edit_file`、`run_command` 会先走 WebSocket permission request。
+- `run_command` 批准后进入 macOS Seatbelt；显式 `full_access` 模式会绕过 Seatbelt。
 - `sandbox/macos_executor.py` 已按 `FileSystemPolicy` 和 `NetworkPolicy` 生成第一版 Seatbelt profile。
 
 仍需要收口的差距：
@@ -64,7 +65,7 @@ Codex-mini 的 workspace 与权限系统要满足这些目标：
 - `ExecPolicy` 已有第一版独立模型，支持 prefix allow/ask/deny、session allowlist 和 dangerous prefix suggestion denylist。
 - 命令策略已有 trust-gated project-local rule 文件加载第一片。
 - CLI 路径没有完整 approve/deny/retry 闭环。
-- session resume 已恢复 workspace policy、additional dirs、current dir，以及同 workspace snapshot 下的 session allowlist；permission mode 仍未产品化持久化。
+- session resume 已恢复 workspace policy、additional dirs、current dir，以及同 workspace 安全边界下的 session allowlist；`full_access` 等运行时 permission mode 不从旧会话静默恢复，而是由当前全局 runtime preference 重新应用。
 - `AGENTS.md` 已按 project root 到 cwd 分层加载；project-local policy config 已接 trust gate 第一片，后续补 UI 和持久化编辑体验。
 
 ## 当前落地状态
@@ -80,20 +81,22 @@ Codex-mini 的 workspace 与权限系统要满足这些目标：
 - `WorkspaceContext` 已拆出 `selected_root`、`project_root`、`current_dir`、`WorkspaceTrust`、`WorkspaceSnapshot` 和 `AdditionalRoot`。
 - workspace payload 只发 `selected_root`、`project_root`、`current_dir`、`trust`、`additional_roots` 等 v2 字段；旧 `root` 与 `allowed_roots` 不再进入协议和前端类型。
 - `security/permissions.py` 已提供 `FileSystemPolicy`、`PermissionProfile`、`ApprovalPolicy` 和 `NetworkPolicy`。
+- `workspace/models.py` 已提供 `PermissionMode`，`server/processors/request_dispatcher.py` 已支持 `set_permission_mode`，该模式作为全局 runtime preference 应用到当前和后续 workspace。
 - 工具读写和命令 cwd 已通过 `SecurityPolicy` 统一使用 filesystem policy。
 - macOS Seatbelt profile 已从 filesystem/network policy 生成，不再使用固定全局读模板。
 - `security/exec_policy.py` 已提供 prefix allow/ask/deny、session allow、危险命令拒绝和 `suggested_prefix_rule`。
 - `server/processors/request_dispatcher.py` 已支持 `change_directory`、`add_dir` 和 `workspace_policy_changed`。
 - `workspace/instructions.py` 已支持从 `project_root` 到 `current_dir` 分层加载 `AGENTS.md`，并避免 external additional root 越界加载。
 - desktop TitleBar 已有打开 workspace、切换 current dir 和加入 additional root 的原生目录选择入口。
-- desktop TitleBar 已展示 permission profile / approval / network 摘要，权限弹窗已展示 cwd/profile/command/prefix suggestion。
-- `permission_decision` 会把批准时的 workspace snapshot 写入 transcript，resume 只恢复与当前 workspace snapshot 完全一致的 session allow prefix。
+- desktop ChatComposer 已提供权限模式切换入口；权限弹窗已简化为命令确认，不再展示 cwd/profile/network 细节。
+- `permission_decision` 会把批准时的 workspace snapshot 写入 transcript，resume 只恢复与当前 workspace 安全边界一致的 session allow prefix；全局 permission mode 不参与该边界匹配。
+- runtime session state 已记录 active turn、取消请求和持久挂起状态；`cancel_turn` 与 `session_busy` 已完成等待点第一版。
 
 尚未落地到代码的部分：
 
 - trust/untrust WebSocket 控制事件和桌面端最小入口已完成第一版；还没有完整策略编辑 UI。
 - 运行时 session allowlist 还没有持久化到 trusted project/user config。
-- workspace resume 已按当前 v2 schema 严格重新验证 `selected_root`、`project_root`、`current_dir` 和 `additional_roots`；permission profile 仍未产品化持久化。
+- workspace resume 已按当前 v2 schema 严格重新验证 `selected_root`、`project_root`、`current_dir` 和 `additional_roots`；运行时 permission mode 不从旧会话恢复，而是从当前全局 runtime preference 重新应用。
 
 下一阶段落地时，应把本文档当作目标架构，把 `docs/PROJECT_ARCHITECTURE_STATUS.md` 当作当前代码事实。两者不一致时，优先以代码事实为准，再同步更新文档。
 
@@ -248,7 +251,7 @@ class PermissionProfile(StrEnum):
 
 - `READ_ONLY`：允许读授权 roots，不允许写，命令默认只读 sandbox。
 - `WORKSPACE_WRITE`：允许写 workspace 和显式 write roots，保护 metadata，网络默认 restricted。
-- `DANGER_FULL_ACCESS`：Codex-mini 不加 filesystem sandbox，但仍保留危险命令拦截和审计。默认 UI 不暴露。
+- `DANGER_FULL_ACCESS`：Codex-mini 不加 filesystem sandbox，但仍保留危险命令拦截和审计。UI 只在用户显式切换到“完全访问”时启用。
 - `EXTERNAL_SANDBOX`：假定外层已经提供隔离，Codex-mini 仍做 policy 决策和审计。
 
 ### ApprovalPolicy
@@ -363,9 +366,9 @@ class ExecRule:
 3. 匹配 dangerous command heuristic。
 4. 匹配 explicit ask rule。
 5. 匹配 explicit allow rule。
-6. 匹配 simple read-only command heuristic，简单只读探索命令可直接执行。
+6. 匹配 simple read-only command heuristic，简单只读探索命令、窄范围只读管道和只读 Git 查询可直接执行。
 7. 匹配 known command heuristic，常见但可能变更项目状态的命令仍需要审批。
-8. 根据 approval policy 与 sandbox mode 决定 allow/ask/deny。
+8. 根据 approval policy 与 sandbox mode 决定 allow/ask/deny；`auto` 会自动批准非危险、非 explicit ask rule 的操作。
 
 危险命令第一版保留并扩展：
 
@@ -416,7 +419,8 @@ tool call
   -> protected metadata check
   -> if approval required: permission_request
   -> approved retry
-  -> execute write in process
+  -> if dry_run: return unified diff preview without writing
+  -> else execute write in process
   -> append transcript
 ```
 
@@ -436,7 +440,7 @@ tool call
   -> if ask: permission_request
   -> approved retry
   -> build sandbox policy from filesystem/network policy
-  -> run via sandbox adapter
+  -> run via sandbox adapter or explicit full-access shell path
   -> emit result
 ```
 
@@ -760,7 +764,7 @@ project-local config denylist：
 
 - 已完成第一版实现和单元测试覆盖。
 - WebSocket `permission_decision` 支持 `scope=session` 与 `prefix_rule`，前端在存在 `suggested_prefix_rule` 时展示本会话同类命令批准入口。
-- session resume 会恢复同 workspace snapshot 下的 session allow prefix，workspace 变化后不继承旧批准。
+- session resume 会恢复同 workspace 安全边界下的 session allow prefix，workspace 变化后不继承旧批准，当前全局 permission mode 不影响该匹配。
 - 已有 trust-gated project-local exec policy 配置文件第一片，但还没有跨 session 持久运行时批准规则。
 
 ### PR5: Workspace Protocol and Desktop UI
@@ -771,14 +775,18 @@ project-local config denylist：
 - `desktop/src/renderer/src/stores/runtime.ts`
 - `desktop/src/renderer/src/types/runtimeEvents.ts`
 - `desktop/src/renderer/src/components/TitleBar.vue`
+- `desktop/src/renderer/src/components/ChatComposer.vue`
 
 交付：
 
 - `change_directory`。（已完成第一版）
 - `add_dir`。（已完成第一版）
+- `set_permission_mode`。（已完成第一版）
+- `cancel_turn` / `session_busy`。（已完成等待点第一版）
 - `workspace_policy_changed`。（已完成第一版）
-- TitleBar 显示 selected root/current dir、trust 和 permission policy 摘要，并提供切换目录和加入额外目录入口。（已完成第一版）
-- 权限弹窗展示 profile、cwd、command、prefix suggestion。（已完成第一版）
+- TitleBar 显示 workspace trust，并提供切换目录和加入额外目录入口。（已完成第一版）
+- ChatComposer 显示权限模式切换入口。（已完成第一版）
+- 权限弹窗展示最小命令确认。（已完成第一版）
 
 验收：
 

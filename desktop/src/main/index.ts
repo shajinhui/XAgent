@@ -1,7 +1,15 @@
-import { app, dialog, ipcMain, shell, BrowserWindow, type OpenDialogOptions } from 'electron'
+import {
+  app,
+  dialog,
+  ipcMain,
+  nativeTheme,
+  shell,
+  BrowserWindow,
+  type OpenDialogOptions
+} from 'electron'
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
 import { existsSync } from 'fs'
-import { mkdir } from 'fs/promises'
+import { mkdir, readFile, writeFile } from 'fs/promises'
 import { createConnection } from 'net'
 import { homedir } from 'os'
 import { join } from 'path'
@@ -10,7 +18,17 @@ import icon from '../../resources/icon.png?asset'
 
 const BACKEND_HOST = '127.0.0.1'
 const BACKEND_PORT = 8000
+type ThemeMode = 'system' | 'light' | 'dark'
+type ResolvedTheme = 'light' | 'dark'
+type ThemeState = { mode: ThemeMode; resolved: ResolvedTheme }
+
+const THEME_CONFIG_FILE = 'theme-preferences.json'
+const THEME_WINDOW_BACKGROUND: Record<ResolvedTheme, string> = {
+  dark: '#20252d',
+  light: '#f4f6f8'
+}
 let backendProcess: ChildProcessWithoutNullStreams | null = null
+let themeMode: ThemeMode = 'system'
 
 function resolveBackendRoot(): string {
   if (is.dev) {
@@ -110,8 +128,59 @@ async function createDefaultChatDirectory(): Promise<string> {
   return targetPath
 }
 
+function normalizeThemeMode(value: unknown): ThemeMode {
+  if (value === 'light' || value === 'dark' || value === 'system') {
+    return value
+  }
+  return 'system'
+}
+
+function resolveTheme(): ResolvedTheme {
+  return nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+}
+
+function getThemeState(): ThemeState {
+  return {
+    mode: themeMode,
+    resolved: resolveTheme()
+  }
+}
+
+function themeConfigPath(): string {
+  return join(app.getPath('userData'), THEME_CONFIG_FILE)
+}
+
+async function loadThemePreference(): Promise<void> {
+  try {
+    const raw = await readFile(themeConfigPath(), 'utf8')
+    const parsed = JSON.parse(raw) as { mode?: unknown }
+    themeMode = normalizeThemeMode(parsed.mode)
+  } catch {
+    themeMode = 'system'
+  }
+  nativeTheme.themeSource = themeMode
+}
+
+async function saveThemePreference(mode: ThemeMode): Promise<void> {
+  await writeFile(themeConfigPath(), JSON.stringify({ mode }, null, 2), 'utf8')
+}
+
+function syncWindowTheme(window: BrowserWindow, state = getThemeState()): void {
+  window.setBackgroundColor(THEME_WINDOW_BACKGROUND[state.resolved])
+  window.webContents.send('theme:changed', state)
+}
+
+function syncAllWindowThemes(): ThemeState {
+  const state = getThemeState()
+  for (const window of BrowserWindow.getAllWindows()) {
+    syncWindowTheme(window, state)
+  }
+  return state
+}
+
 function createWindow(): void {
   const isMac = process.platform === 'darwin'
+  const themeState = getThemeState()
 
   const mainWindow = new BrowserWindow({
     width: 1080,
@@ -121,7 +190,7 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     resizable: true,
-    backgroundColor: '#20252d',
+    backgroundColor: THEME_WINDOW_BACKGROUND[themeState.resolved],
     titleBarStyle: isMac ? 'hiddenInset' : 'default',
     title: 'Codex-mini',
     ...(process.platform === 'linux' ? { icon } : {}),
@@ -137,6 +206,10 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
+  })
+
+  mainWindow.webContents.once('did-finish-load', () => {
+    syncWindowTheme(mainWindow)
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -188,9 +261,30 @@ app.whenReady().then(() => {
     return createDefaultChatDirectory()
   })
 
-  void startBackend().finally(() => {
-    createWindow()
+  ipcMain.handle('theme:get', () => {
+    return getThemeState()
   })
+
+  ipcMain.handle('theme:set-mode', async (_event, mode: unknown) => {
+    themeMode = normalizeThemeMode(mode)
+    nativeTheme.themeSource = themeMode
+    try {
+      await saveThemePreference(themeMode)
+    } catch (error) {
+      console.error(`Failed to save theme preference: ${String(error)}`)
+    }
+    return syncAllWindowThemes()
+  })
+
+  nativeTheme.on('updated', () => {
+    syncAllWindowThemes()
+  })
+
+  void loadThemePreference()
+    .then(() => startBackend())
+    .finally(() => {
+      createWindow()
+    })
 
   app.on('activate', function () {
     // 在 macOS 中，当 Dock 图标被点击且没有其他窗口打开时，通常会重新创建一个窗口。

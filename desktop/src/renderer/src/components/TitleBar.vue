@@ -1,5 +1,18 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import {
+  FolderInput,
+  FolderOpen,
+  FolderPlus,
+  Link,
+  PanelLeft,
+  Plus,
+  RefreshCw,
+  ShieldCheck,
+  ShieldMinus,
+  Unlink
+} from 'lucide-vue-next'
+import IconButton from '@renderer/components/ui/IconButton.vue'
 import type { RuntimeConnectionStatus } from '@renderer/services/runtimeSocket'
 import type { RuntimeWorkspace } from '@renderer/types/runtimeEvents'
 
@@ -53,58 +66,10 @@ const trustActionLabel = computed(() =>
   isWorkspaceTrusted.value ? '取消信任当前项目' : '信任当前项目'
 )
 
-const currentDirLabel = computed(() => {
-  if (!props.workspace) return ''
-  const root = trimTrailingSeparators(props.workspace.selected_root)
-  const current = trimTrailingSeparators(props.workspace.current_dir)
-  if (current === root) return '.'
-  if (current.startsWith(`${root}/`)) return current.slice(root.length + 1)
-  return current
-})
-
-const permissionProfileLabel = computed(() => {
-  const profile = props.workspace?.policy?.permission_profile
-  if (profile === 'read_only') return '只读'
-  if (profile === 'danger_no_sandbox') return '无沙箱'
-  return '工作区可写'
-})
-
-const policySourceLabel = computed(() => {
-  const source = props.workspace?.policy?.source
-  return source === 'project_config' ? '项目配置' : '默认策略'
-})
-
-const networkPolicyLabel = computed(() => {
-  const network = props.workspace?.policy?.network_policy
-  return network === 'enabled' ? '网络开启' : '网络受限'
-})
-
-const approvalPolicyLabel = computed(() => {
-  const approval = props.workspace?.policy?.approval_policy
-  return approval === 'never' ? '禁止询问' : '变更前确认'
-})
-
 const workspaceTitle = computed(() => {
   if (!props.workspace) return '打开工作区'
-  const roots = props.workspace.additional_roots
-    .map((root) => `${root.access === 'write' ? 'write' : 'read'} ${root.path}`)
-    .join('\n')
-  return [
-    `selected: ${props.workspace.selected_root}`,
-    `current: ${props.workspace.current_dir}`,
-    `trust: ${props.workspace.trust.level}`,
-    `profile: ${props.workspace.policy?.permission_profile || 'workspace_write'}`,
-    `approval: ${props.workspace.policy?.approval_policy || 'ask-before-mutating'}`,
-    `network: ${props.workspace.policy?.network_policy || 'restricted'}`,
-    roots ? `additional:\n${roots}` : ''
-  ]
-    .filter(Boolean)
-    .join('\n')
+  return `${props.workspace.display_name} · ${workspaceTrustLabel.value}`
 })
-
-function trimTrailingSeparators(path: string): string {
-  return path.replace(/[\\/]+$/, '')
-}
 </script>
 
 <template>
@@ -116,9 +81,7 @@ function trimTrailingSeparators(path: string): string {
       aria-label="打开侧边栏"
       @click="emit('toggleSidebar')"
     >
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M4 5h16v14H4V5Zm6 0v14" />
-      </svg>
+      <PanelLeft />
     </button>
 
     <div class="title-copy">
@@ -140,97 +103,51 @@ function trimTrailingSeparators(path: string): string {
         aria-label="打开工作区"
         @click="emit('openWorkspace')"
       >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M3.5 6.5h6l2 2h9v9.5a2 2 0 0 1-2 2h-15v-13.5Z" />
-          <path d="M3.5 8.5V6a2 2 0 0 1 2-2h3.2l1.8 2.5" />
-        </svg>
+        <FolderOpen />
         <span class="workspace-text">
           <span>{{ workspaceLabel }}</span>
-          <small v-if="props.workspace">
-            {{ currentDirLabel }} · {{ permissionProfileLabel }} · {{ workspaceTrustLabel }}
-          </small>
+          <small v-if="props.workspace">{{ workspaceTrustLabel }}</small>
         </span>
       </button>
-      <div v-if="props.workspace" class="policy-chip" :title="workspaceTitle">
-        <span>{{ policySourceLabel }}</span>
-        <small>{{ approvalPolicyLabel }} · {{ networkPolicyLabel }}</small>
-      </div>
-      <button
+      <IconButton
         v-if="props.workspace"
-        class="icon-button"
-        :class="{ active: isWorkspaceTrusted }"
-        type="button"
-        :aria-label="trustActionLabel"
+        :label="trustActionLabel"
+        :active="isWorkspaceTrusted"
         :title="trustActionLabel"
         @click="isWorkspaceTrusted ? emit('untrustWorkspace') : emit('trustWorkspace')"
       >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M12 3.5 19 6v5.4c0 4.3-2.8 7.8-7 9.1-4.2-1.3-7-4.8-7-9.1V6l7-2.5Z" />
-          <path v-if="isWorkspaceTrusted" d="m9 12 2 2 4-4" />
-          <path v-else d="M9 12h6" />
-        </svg>
-      </button>
-      <button
+        <ShieldCheck v-if="isWorkspaceTrusted" />
+        <ShieldMinus v-else />
+      </IconButton>
+      <IconButton
         v-if="props.workspace"
-        class="icon-button"
-        type="button"
-        aria-label="切换当前目录"
+        label="切换当前目录"
         title="切换当前目录"
         @click="emit('changeDirectory')"
       >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M3.5 6.5h6l2 2h9v8.5a2 2 0 0 1-2 2h-15V6.5Z" />
-          <path d="m9 13 3 3 3-3M12 16V9" />
-        </svg>
-      </button>
-      <button
+        <FolderInput />
+      </IconButton>
+      <IconButton
         v-if="props.workspace"
-        class="icon-button"
-        type="button"
-        aria-label="加入额外目录"
+        label="加入额外目录"
         title="加入额外目录"
         @click="emit('addDirectory')"
       >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M3.5 6.5h6l2 2h9v9.5a2 2 0 0 1-2 2h-15V6.5Z" />
-          <path d="M12 12v6M9 15h6" />
-        </svg>
-      </button>
-      <button
-        v-if="isSuspended"
-        class="icon-button"
-        type="button"
-        aria-label="恢复会话"
-        @click="emit('resume')"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M5 12a7 7 0 1 0 2.1-5M5 5v5h5" />
-        </svg>
-      </button>
-      <button
-        class="icon-button"
-        type="button"
-        :aria-label="canDisconnect ? '断开后端' : '连接后端'"
+        <FolderPlus />
+      </IconButton>
+      <IconButton v-if="isSuspended" label="恢复会话" @click="emit('resume')">
+        <RefreshCw />
+      </IconButton>
+      <IconButton
+        :label="canDisconnect ? '断开后端' : '连接后端'"
         @click="canDisconnect ? emit('disconnect') : emit('connect')"
       >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path
-            v-if="canDisconnect"
-            d="M6 8.5h8.5a4.5 4.5 0 0 1 0 9H13M18 15.5H9.5a4.5 4.5 0 0 1 0-9H11"
-          />
-          <path v-else d="M9 7H7.5a4.5 4.5 0 0 0 0 9H10M14 7h2.5a4.5 4.5 0 0 1 0 9H15M8 12h8" />
-        </svg>
-      </button>
-      <button
-        class="icon-button"
-        type="button"
-        aria-label="新建对话"
-        @click="emit('newConversation')"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M12 5v14M5 12h14" />
-        </svg>
-      </button>
+        <Unlink v-if="canDisconnect" />
+        <Link v-else />
+      </IconButton>
+      <IconButton label="新建对话" @click="emit('newConversation')">
+        <Plus />
+      </IconButton>
     </nav>
   </header>
 </template>

@@ -17,6 +17,8 @@ class TranscriptWriter:
     def __init__(self, transcript_path: Path) -> None:
         self.transcript_path = transcript_path
         self.transcript_path.parent.mkdir(parents=True, exist_ok=True)
+        self._buffer: List[str] = []
+        self._buffer_size = 10  # 批量写入阈值
 
     def append(
         self,
@@ -26,6 +28,7 @@ class TranscriptWriter:
         *,
         timestamp: float | None = None,
         event_id: str | None = None,
+        force_flush: bool = False,
     ) -> TranscriptEvent:
         """追加一条 transcript event，并返回结构化事件对象。"""
 
@@ -36,14 +39,29 @@ class TranscriptWriter:
             timestamp=timestamp if timestamp is not None else time.time(),
             payload=payload or {},
         )
-        with self.transcript_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(_event_to_json(event), ensure_ascii=False, sort_keys=True))
-            handle.write("\n")
+
+        line = json.dumps(_event_to_json(event), ensure_ascii=False, sort_keys=True) + "\n"
+        self._buffer.append(line)
+
+        # 首条事件立即落盘，保证 transcript 文件对外可见；后续事件批量刷新。
+        should_flush = force_flush or len(self._buffer) >= self._buffer_size or not self.transcript_path.exists()
+        if should_flush:
+            self.flush()
+
         return event
+
+    def flush(self) -> None:
+        """强制刷新缓冲区到磁盘。"""
+        if not self._buffer:
+            return
+        with self.transcript_path.open("a", encoding="utf-8") as handle:
+            handle.writelines(self._buffer)
+        self._buffer.clear()
 
     def load(self) -> List[TranscriptEvent]:
         """读取并校验 transcript 文件中的全部事件。"""
 
+        self.flush()
         if not self.transcript_path.exists():
             return []
 
@@ -63,6 +81,13 @@ class TranscriptWriter:
             for event in events:
                 handle.write(json.dumps(_event_to_json(event), ensure_ascii=False, sort_keys=True))
                 handle.write("\n")
+
+    def __del__(self) -> None:
+        """析构时确保缓冲区已刷新。"""
+        try:
+            self.flush()
+        except Exception:
+            pass
 
 
 def _event_to_json(event: TranscriptEvent) -> Dict[str, Any]:

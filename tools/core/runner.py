@@ -95,16 +95,28 @@ class ToolRunner:
 
         try:
             if tool.meta.requires_approval and name != "run_command" and not approved:
-                raise ToolPermissionError(
-                    f"工具需要用户确认: {name}",
-                    metadata={
-                        "error_type": "permission_required",
-                        "permission_action": "ask",
-                        "category": "tool_approval",
-                        "tool": name,
-                        **_permission_context_metadata(self.ctx),
-                    },
-                )
+                if self.ctx.approval_policy == ApprovalPolicy.NEVER:
+                    raise ToolPermissionError(
+                        f"当前 approval policy 禁止请求用户批准: {name}",
+                        metadata={
+                            "error_type": "permission_denied",
+                            "permission_action": "deny",
+                            "category": "approval_unavailable",
+                            "tool": name,
+                            **_permission_context_metadata(self.ctx),
+                        },
+                    )
+                if self.ctx.approval_policy != ApprovalPolicy.AUTO:
+                    raise ToolPermissionError(
+                        f"工具需要用户确认: {name}",
+                        metadata={
+                            "error_type": "permission_required",
+                            "permission_action": "ask",
+                            "category": "tool_approval",
+                            "tool": name,
+                            **_permission_context_metadata(self.ctx),
+                        },
+                    )
 
             payload["_approved"] = approved
             handler_result = tool.run(self.ctx, payload)
@@ -176,6 +188,11 @@ def _filesystem_policy_for_profile(
             selected_root,
             current_dir=current_dir,
             additional_roots=additional_roots,
+        )
+    if permission_profile == PermissionProfile.DANGER_NO_SANDBOX:
+        return FileSystemPolicy.danger_full_access(
+            selected_root,
+            current_dir=current_dir,
         )
     return FileSystemPolicy.workspace_write(
         selected_root,

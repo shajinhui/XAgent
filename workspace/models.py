@@ -25,6 +25,15 @@ class TrustLevel(StrEnum):
     SESSION_ONLY = "session_only"
 
 
+class PermissionMode(StrEnum):
+    """用户在前端选择的运行权限模式。"""
+
+    REQUEST_APPROVAL = "request_approval"
+    AUTO_APPROVE = "auto_approve"
+    FULL_ACCESS = "full_access"
+    CUSTOM = "custom"
+
+
 @dataclass(frozen=True)
 class WorkspaceTrust:
     """项目本地配置与高风险扩展能力的信任状态。"""

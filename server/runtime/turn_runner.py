@@ -42,6 +42,10 @@ class PermissionDecision:
     prefix_rule: tuple[str, ...] | None = None
 
 
+class TurnCancelled(Exception):
+    """用户请求取消当前 turn 时抛出，由 WebSocket 入口统一收口。"""
+
+
 async def stream_model_message(
     ws: Any,
     registry: ToolRegistry,
@@ -66,6 +70,7 @@ async def stream_model_message(
     content_parts: List[str] = []
     reasoning_parts: List[str] = []
     tool_call_buffers: Dict[int, Dict[str, Any]] = {}
+    chunk_count = 0
     for chunk in stream:
         delta = extract_stream_delta(chunk)
         reasoning_content = delta.get("reasoning_content")
@@ -87,8 +92,10 @@ async def stream_model_message(
         for tool_call_delta in delta.get("tool_calls") or []:
             merge_tool_call_delta(tool_call_buffers, tool_call_delta)
 
-        # 让出事件循环，避免长流式响应阻塞 WebSocket 其他协程。
-        await asyncio.sleep(0)
+        # 每 10 个 chunk 才让步，降低事件循环切换开销
+        chunk_count += 1
+        if chunk_count % 10 == 0:
+            await asyncio.sleep(0)
 
     return build_assistant_message(
         "".join(content_parts),
@@ -108,6 +115,19 @@ async def wait_for_permission_decision(
     while True:
         decision = await ws.receive_json()
         if decision.get("type") != "permission_decision":
+            if _is_cancel_packet(decision, turn_id, request_id):
+                raise TurnCancelled("用户取消了当前回合")
+            if decision.get("type") == "user_input":
+                await ws.send_json(
+                    build_event(
+                        "session_busy",
+                        session_id,
+                        turn_id,
+                        request_id=request_id,
+                        detail="当前回合正在等待权限确认，请先处理当前请求。",
+                    )
+                )
+                continue
             await ws.send_json(
                 build_event(
                     "error",
@@ -154,6 +174,19 @@ async def wait_for_clarification_response(
     while True:
         response = await ws.receive_json()
         if response.get("type") != "clarification_response":
+            if _is_cancel_packet(response, turn_id, request_id):
+                raise TurnCancelled("用户取消了当前回合")
+            if response.get("type") == "user_input":
+                await ws.send_json(
+                    build_event(
+                        "session_busy",
+                        session_id,
+                        turn_id,
+                        request_id=request_id,
+                        detail="当前回合正在等待用户回答，请先处理当前问题。",
+                    )
+                )
+                continue
             await ws.send_json(
                 build_event(
                     "error",
@@ -545,6 +578,18 @@ def _normalize_prefix_rule(value: Any) -> tuple[str, ...] | None:
             return None
         parts.append(text)
     return tuple(parts) if parts else None
+
+
+def _is_cancel_packet(packet: Dict[str, Any], turn_id: str, request_id: str) -> bool:
+    """判断当前等待点是否收到匹配的取消请求。"""
+
+    if packet.get("type") != "cancel_turn":
+        return False
+    packet_turn_id = packet.get("turn_id")
+    packet_request_id = packet.get("request_id")
+    turn_matches = packet_turn_id in {None, turn_id}
+    request_matches = packet_request_id in {None, request_id}
+    return turn_matches and request_matches
 
 
 def _approved_session_prefix(

@@ -39,6 +39,7 @@ from server.runtime.transcript_events import (
     record_transcript_event,
 )
 from server.runtime.turn_runner import (
+    TurnCancelled,
     request_user_clarification,
     wait_for_clarification_response,
     wait_for_permission_decision,
@@ -49,8 +50,8 @@ from server.views.session_summary import (
     session_display_messages,
     summarize_session_record,
 )
-from security.permissions import PermissionProfile
-from workspace import TrustLevel, WorkspaceTrustStore
+from security.permissions import ApprovalPolicy, NetworkPolicy, PermissionProfile
+from workspace import PermissionMode, TrustLevel, WorkspaceTrustStore
 
 
 class FakeWebSocket:
@@ -885,7 +886,7 @@ class WebSocketRequestDispatcherTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(external.resolve(), context.runner.ctx.filesystem_policy.readable_roots)
             self.assertIn(external.resolve(), context.runner.ctx.filesystem_policy.writable_roots)
 
-    async def test_trust_workspace_loads_project_policy_and_emits_event(self) -> None:
+    async def test_trust_workspace_enables_custom_project_policy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "workspace"
             trust_path = Path(tmp) / "trust.json"
@@ -922,15 +923,27 @@ category = "publish_blocked"
                 self.assertEqual(ws.sent[0]["workspace"]["trust"]["level"], "trusted")
                 self.assertEqual(context.workspace.trust.level, TrustLevel.TRUSTED)
                 assert context.workspace.project_policy is not None
+                self.assertEqual(context.workspace.project_policy.source, "runtime_mode")
+                self.assertEqual(context.runner.ctx.permission_profile, PermissionProfile.WORKSPACE_WRITE)
+                self.assertEqual(
+                    WorkspaceTrustStore(trust_path).trust_for(root).level,
+                    TrustLevel.TRUSTED,
+                )
+
+                handled = await dispatcher.handle_control_packet(
+                    {
+                        "type": "set_permission_mode",
+                        "mode": PermissionMode.CUSTOM.value,
+                        "request_id": "mode-custom",
+                    }
+                )
+
+                self.assertTrue(handled)
                 self.assertEqual(context.workspace.project_policy.source, "project_config")
                 self.assertEqual(context.runner.ctx.permission_profile, PermissionProfile.READ_ONLY)
                 self.assertEqual(
                     context.runner.ctx.policy.check_command("npm publish").category,
                     "publish_blocked",
-                )
-                self.assertEqual(
-                    WorkspaceTrustStore(trust_path).trust_for(root).level,
-                    TrustLevel.TRUSTED,
                 )
 
     async def test_untrust_workspace_returns_to_default_policy(self) -> None:
@@ -948,7 +961,7 @@ category = "publish_blocked"
 
             with patch.dict(os.environ, {"CODEX_MINI_TRUST_STORE": trust_path.as_posix()}):
                 context = WebSocketRuntimeContext.create(root, "system")
-                self.assertEqual(context.runner.ctx.permission_profile, PermissionProfile.READ_ONLY)
+                self.assertEqual(context.runner.ctx.permission_profile, PermissionProfile.WORKSPACE_WRITE)
                 ws = FakeWebSocket()
                 dispatcher = WebSocketRequestDispatcher(ws, context)
 
@@ -962,12 +975,87 @@ category = "publish_blocked"
                 self.assertEqual(ws.sent[0]["workspace"]["trust"]["level"], "untrusted")
                 self.assertEqual(context.workspace.trust.level, TrustLevel.UNTRUSTED)
                 assert context.workspace.project_policy is not None
-                self.assertEqual(context.workspace.project_policy.source, "defaults")
+                self.assertEqual(context.workspace.project_policy.source, "runtime_mode")
                 self.assertEqual(context.runner.ctx.permission_profile, PermissionProfile.WORKSPACE_WRITE)
                 self.assertEqual(
                     WorkspaceTrustStore(trust_path).trust_for(root).level,
                     TrustLevel.UNTRUSTED,
                 )
+
+    async def test_set_permission_mode_updates_runner_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            context = WebSocketRuntimeContext.create(root, "system")
+            ws = FakeWebSocket()
+            dispatcher = WebSocketRequestDispatcher(ws, context)
+
+            handled = await dispatcher.handle_control_packet(
+                {
+                    "type": "set_permission_mode",
+                    "mode": PermissionMode.FULL_ACCESS.value,
+                    "request_id": "mode-1",
+                }
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(ws.sent[0]["type"], "workspace_policy_changed")
+            self.assertEqual(ws.sent[0]["reason"], "set_permission_mode")
+            self.assertEqual(ws.sent[0]["workspace"]["policy"]["permission_mode"], "full_access")
+            self.assertEqual(context.permission_mode, PermissionMode.FULL_ACCESS)
+            self.assertEqual(context.runner.ctx.permission_profile, PermissionProfile.DANGER_NO_SANDBOX)
+            self.assertEqual(context.runner.ctx.approval_policy, ApprovalPolicy.AUTO)
+            self.assertEqual(context.runner.ctx.network_policy, NetworkPolicy.ENABLED)
+
+    async def test_permission_mode_persists_across_workspace_switch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            first = Path(tmp) / "first"
+            second = Path(tmp) / "second"
+            first.mkdir()
+            second.mkdir()
+            context = WebSocketRuntimeContext.create(first, "system")
+            ws = FakeWebSocket()
+            dispatcher = WebSocketRequestDispatcher(ws, context)
+
+            await dispatcher.handle_control_packet(
+                {
+                    "type": "set_permission_mode",
+                    "mode": PermissionMode.FULL_ACCESS.value,
+                    "request_id": "mode-global",
+                }
+            )
+            handled = await dispatcher.handle_control_packet(
+                {
+                    "type": "open_workspace",
+                    "path": second.as_posix(),
+                    "request_id": "workspace-second",
+                }
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(context.permission_mode, PermissionMode.FULL_ACCESS)
+            self.assertEqual(context.workspace.selected_root, second.resolve())
+            self.assertEqual(context.runner.ctx.permission_profile, PermissionProfile.DANGER_NO_SANDBOX)
+            self.assertEqual(ws.sent[-1]["type"], "workspace_changed")
+            self.assertEqual(ws.sent[-1]["workspace"]["policy"]["permission_mode"], "full_access")
+
+    async def test_set_custom_permission_mode_requires_project_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            context = WebSocketRuntimeContext.create(root, "system")
+            ws = FakeWebSocket()
+            dispatcher = WebSocketRequestDispatcher(ws, context)
+
+            handled = await dispatcher.handle_control_packet(
+                {
+                    "type": "set_permission_mode",
+                    "mode": PermissionMode.CUSTOM.value,
+                    "request_id": "mode-custom",
+                }
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(ws.sent[0]["type"], "workspace_error")
+            self.assertIn("config.toml", ws.sent[0]["message"])
 
     async def test_trust_workspace_rejects_invalid_project_config_without_persisting_trust(
         self,
@@ -1093,6 +1181,111 @@ category = "publish_blocked"
             self.assertTrue(decision.allowed)
             self.assertFalse(decision.approval_required)
             self.assertEqual(decision.matched_prefix_rule, ("npm", "run", "test"))
+
+    async def test_resume_session_allow_ignores_global_permission_mode_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            root.mkdir()
+            seed_context = WebSocketRuntimeContext.create(root, "system")
+            session_id = "allow-session-global-mode"
+            workspace_snapshot = seed_context.workspace.as_dict()
+            seed_context.session_store.create_session(
+                session_id=session_id,
+                metadata={"workspace": workspace_snapshot},
+            )
+            seed_context.session_store.append_event(
+                session_id,
+                "permission_decision",
+                {
+                    "turn_id": "turn-1",
+                    "request_id": "call-1",
+                    "tool": "run_command",
+                    "approved": True,
+                    "scope": "session",
+                    "prefix_rule": ["npm", "run", "test"],
+                    "workspace": workspace_snapshot,
+                },
+            )
+
+            context = WebSocketRuntimeContext.create(root, "system")
+            context.change_permission_mode(PermissionMode.FULL_ACCESS)
+            ws = FakeWebSocket()
+            dispatcher = WebSocketRequestDispatcher(ws, context)
+
+            handled = await dispatcher.handle_control_packet(
+                {
+                    "type": "resume_session",
+                    "session_id": session_id,
+                    "request_id": "resume-global-mode",
+                }
+            )
+            decision = context.runner.ctx.policy.check_command("npm run test -- --watch=false")
+
+            self.assertTrue(handled)
+            self.assertEqual(ws.sent[0]["type"], "session_resumed")
+            self.assertEqual(context.permission_mode, PermissionMode.FULL_ACCESS)
+            self.assertEqual(context.workspace.project_policy.permission_mode, PermissionMode.FULL_ACCESS)
+            self.assertEqual(decision.matched_prefix_rule, ("npm", "run", "test"))
+
+    async def test_resume_session_restores_persisted_suspension_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            root.mkdir()
+            seed_context = WebSocketRuntimeContext.create(root, "system")
+            session_id = "suspended-session"
+            seed_context.session_store.create_session(
+                session_id=session_id,
+                metadata={"workspace": seed_context.workspace.as_dict()},
+            )
+            seed_context.session_store.append_event(
+                session_id,
+                "session_suspended",
+                {
+                    "turn_id": "turn-1",
+                    "category": "dangerous_shell",
+                    "detail": "blocked",
+                    "session_state": {
+                        "status": "suspended",
+                        "suspended": True,
+                        "suspended_category": "dangerous_shell",
+                        "suspended_detail": "blocked",
+                        "suspended_at": 1.0,
+                    },
+                },
+            )
+
+            context = WebSocketRuntimeContext.create(root, "system")
+            ws = FakeWebSocket()
+            dispatcher = WebSocketRequestDispatcher(ws, context)
+
+            handled = await dispatcher.handle_control_packet(
+                {
+                    "type": "resume_session",
+                    "session_id": session_id,
+                    "request_id": "resume-suspended",
+                }
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(ws.sent[0]["type"], "session_resumed")
+            self.assertTrue(ws.sent[0]["session_state"]["suspended"])
+            self.assertEqual(ws.sent[0]["session_state"]["suspended_category"], "dangerous_shell")
+            self.assertTrue(context.session_state.suspended)
+
+            second_context = WebSocketRuntimeContext.create(root, "system")
+            second_ws = FakeWebSocket()
+            second_dispatcher = WebSocketRequestDispatcher(second_ws, second_context)
+
+            handled = await second_dispatcher.handle_control_packet(
+                {
+                    "type": "resume_session",
+                    "session_id": session_id,
+                    "request_id": "resume-suspended-again",
+                }
+            )
+
+            self.assertTrue(handled)
+            self.assertTrue(second_ws.sent[0]["session_state"]["suspended"])
 
     async def test_resume_session_does_not_restore_allow_prefix_after_workspace_change(
         self,
@@ -1243,9 +1436,49 @@ class TurnRunnerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(decision.approved)
         self.assertEqual(decision.feedback, "换个方案")
-        self.assertEqual([event["type"] for event in ws.sent], ["error", "error"])
-        self.assertEqual(ws.sent[0]["received_type"], "user_input")
+        self.assertEqual([event["type"] for event in ws.sent], ["session_busy", "error"])
         self.assertEqual(ws.sent[1]["received_request_id"], "other")
+
+    async def test_wait_for_permission_decision_reports_busy_for_user_input(self) -> None:
+        ws = FakeWebSocket(
+            [
+                {"type": "user_input", "content": "next"},
+                {
+                    "type": "permission_decision",
+                    "request_id": "request-1",
+                    "approved": False,
+                },
+            ]
+        )
+
+        decision = await wait_for_permission_decision(
+            ws,
+            "session-1",
+            "turn-1",
+            "request-1",
+        )
+
+        self.assertFalse(decision.approved)
+        self.assertEqual(ws.sent[0]["type"], "session_busy")
+
+    async def test_wait_for_permission_decision_accepts_cancel_turn(self) -> None:
+        ws = FakeWebSocket(
+            [
+                {
+                    "type": "cancel_turn",
+                    "turn_id": "turn-1",
+                    "request_id": "request-1",
+                },
+            ]
+        )
+
+        with self.assertRaises(TurnCancelled):
+            await wait_for_permission_decision(
+                ws,
+                "session-1",
+                "turn-1",
+                "request-1",
+            )
 
     async def test_wait_for_permission_decision_accepts_session_prefix_scope(self) -> None:
         ws = FakeWebSocket(
@@ -1298,9 +1531,27 @@ class TurnRunnerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response["choice_id"], "core")
         self.assertEqual(response["content"], "核心后端")
-        self.assertEqual([event["type"] for event in ws.sent], ["error", "error"])
-        self.assertEqual(ws.sent[0]["received_type"], "user_input")
+        self.assertEqual([event["type"] for event in ws.sent], ["session_busy", "error"])
         self.assertEqual(ws.sent[1]["received_request_id"], "other")
+
+    async def test_wait_for_clarification_response_accepts_cancel_turn(self) -> None:
+        ws = FakeWebSocket(
+            [
+                {
+                    "type": "cancel_turn",
+                    "turn_id": "turn-1",
+                    "request_id": "request-1",
+                },
+            ]
+        )
+
+        with self.assertRaises(TurnCancelled):
+            await wait_for_clarification_response(
+                ws,
+                "session-1",
+                "turn-1",
+                "request-1",
+            )
 
     async def test_request_user_clarification_records_response_and_returns_tool_result(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

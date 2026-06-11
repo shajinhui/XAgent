@@ -26,7 +26,7 @@ from server.runtime.model_config import (
 )
 from server.runtime.session_state import persist_websocket_session
 from server.runtime.transcript_events import record_transcript_event
-from server.runtime.turn_runner import run_turn
+from server.runtime.turn_runner import TurnCancelled, run_turn
 from server.runtime.websocket_context import WebSocketRuntimeContext
 from session.turn_context import TurnContext
 from tools.core.registry import ToolRegistry
@@ -238,6 +238,7 @@ if app is not None:
                 context.history.clear_historical_reasoning_content()
                 context.history.append_user_message(user_text)
                 turn_id = str(uuid.uuid4())
+                context.session_state.start_turn(turn_id)
                 # TurnContext 是“一轮用户输入”的运行态快照；它把连接级状态、
                 # 模型配置、workspace、history 和工具运行器收束成一个参数传给 run_turn。
                 turn_context = TurnContext.from_runtime(
@@ -290,7 +291,33 @@ if app is not None:
                         context.session_store,
                         turn_context,
                     )
+                except TurnCancelled as exc:
+                    context.session_state.request_cancellation()
+                    requested_state = context.session_state.as_dict()
+                    context.session_state.finish_turn()
+                    record_transcript_event(
+                        context.session_store,
+                        context.session_id,
+                        "turn_cancelled",
+                        {
+                            "turn_id": turn_id,
+                            "detail": str(exc),
+                            "requested_state": requested_state,
+                            "session_state": context.session_state.as_dict(),
+                        },
+                    )
+                    await ws.send_json(
+                        build_event(
+                            "turn_cancelled",
+                            context.session_id,
+                            turn_id,
+                            detail=str(exc),
+                            session_state=context.session_state.as_dict(),
+                        )
+                    )
+                    continue
                 except Exception as exc:
+                    context.session_state.finish_turn()
                     record_transcript_event(
                         context.session_store,
                         context.session_id,
@@ -314,6 +341,8 @@ if app is not None:
                     )
                     continue
 
+                context.session_state.finish_turn()
+
                 final_text = ""
                 for msg in reversed(context.messages):
                     if msg.get("role") == "assistant" and msg.get("content"):
@@ -322,6 +351,11 @@ if app is not None:
 
                 if context.session_state.suspended:
                     final_text = context.session_state.suspended_detail or "会话已挂起，请恢复后继续。"
+
+                # 确保所有缓冲区已刷新
+                context.session_store.writer(context.session_id).flush()
+                if hasattr(context.session_store, '_flush_index_update'):
+                    context.session_store._flush_index_update(context.session_id)
 
                 record_transcript_event(
                     context.session_store,

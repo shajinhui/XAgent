@@ -40,6 +40,11 @@ class PermissionsContext:
             project_root=workspace.project_root,
             additional_roots=tuple(root.as_dict() for root in workspace.additional_roots),
             approval_policy=project_policy.approval_policy.value,
+            command_sandbox=(
+                "none"
+                if project_policy.permission_profile.value == "danger_no_sandbox"
+                else "macos-seatbelt"
+            ),
             network_allowed=project_policy.network_policy.value == "enabled",
         )
 

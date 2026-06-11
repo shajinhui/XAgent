@@ -9,6 +9,7 @@ from workspace.instructions import (
 )
 from workspace.models import (
     AdditionalRoot,
+    PermissionMode,
     TrustLevel,
     WorkspaceContext,
     WorkspaceSnapshot,
@@ -20,6 +21,7 @@ from workspace.validator import validate_workspace_path
 __all__ = [
     "validate_workspace_path",
     "AdditionalRoot",
+    "PermissionMode",
     "ProjectInstructionFile",
     "ProjectInstructions",
     "ProjectPolicyConfig",

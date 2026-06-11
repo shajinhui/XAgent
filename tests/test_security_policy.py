@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from security import ApprovalPolicy, FileSystemPolicy, PermissionProfile
+from security import ApprovalPolicy, ExecPolicy, ExecPolicyRule, FileSystemPolicy, PermissionProfile
 from security.circuit_breaker import CircuitBreaker
 from security.policy import SecurityPolicy
 from workspace import AdditionalRoot
@@ -149,6 +149,61 @@ class SecurityPolicyTests(unittest.TestCase):
 
             self.assertEqual(decision.action, "allow")
             self.assertTrue(decision.allowed)
+
+    def test_auto_approval_policy_allows_non_dangerous_command_without_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = SecurityPolicy(Path(tmp), approval_policy=ApprovalPolicy.AUTO)
+
+            decision = policy.check_command("ruff check .")
+
+        self.assertEqual(decision.action, "allow")
+        self.assertEqual(decision.category, "auto_approved_command")
+        self.assertFalse(decision.approval_required)
+
+    def test_auto_approval_policy_keeps_explicit_ask_rule(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = SecurityPolicy(
+                Path(tmp),
+                approval_policy=ApprovalPolicy.AUTO,
+                exec_policy=ExecPolicy([ExecPolicyRule.ask("npm", "publish")]),
+            )
+
+            decision = policy.check_command("npm publish")
+
+        self.assertTrue(decision.requires_approval)
+
+    def test_check_command_allows_safe_git_after_validated_cd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            policy = SecurityPolicy(root)
+
+            decision = policy.check_command(f"cd {root.as_posix()} && git log --oneline -10")
+
+        self.assertEqual(decision.category, "safe_read_only")
+        self.assertFalse(decision.approval_required)
+
+    def test_check_command_does_not_auto_allow_cd_outside_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            outside = Path(tmp) / "outside"
+            root.mkdir()
+            outside.mkdir()
+            policy = SecurityPolicy(root)
+
+            decision = policy.check_command(f"cd {outside.as_posix()} && git log --oneline -10")
+
+        self.assertTrue(decision.requires_approval)
+        self.assertNotEqual(decision.category, "safe_read_only")
+
+    def test_check_command_does_not_auto_allow_mutating_git_after_cd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            policy = SecurityPolicy(root)
+
+            decision = policy.check_command(f"cd {root.as_posix()} && git checkout main")
+
+        self.assertTrue(decision.approval_required)
+        self.assertNotEqual(decision.category, "safe_read_only")
 
     def test_session_prefix_allow_skips_future_command_approval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -75,15 +75,6 @@ function createFallbackConversationTitle(messages: ConversationTitleMessage[]): 
   return `${title.slice(0, 18)}...`
 }
 
-function createWelcomeMessage(): ChatMessage {
-  return {
-    id: createMessageId(),
-    role: 'assistant',
-    meta: '桌面端',
-    content: '聊天壳已经接入前端 WebSocket 层。启动后端后，可以直接从这里发送消息。'
-  }
-}
-
 export const useChatStore = defineStore('chat', {
   state: () => ({
     conversationTitle: '新对话',
@@ -92,7 +83,7 @@ export const useChatStore = defineStore('chat', {
     conversationTitleStatus: 'idle' as 'idle' | 'pending' | 'ready' | 'error',
     streamingMessageId: null as number | null,
     activeActivityMessageId: null as number | null,
-    messages: [createWelcomeMessage()] as ChatMessage[]
+    messages: [] as ChatMessage[]
   }),
   getters: {
     messageCount: (state) =>
@@ -112,7 +103,7 @@ export const useChatStore = defineStore('chat', {
       this.conversationTitleStatus = 'idle'
       this.streamingMessageId = null
       this.activeActivityMessageId = null
-      this.messages = [createWelcomeMessage()]
+      this.messages = []
     },
 
     loadConversation(messages: RuntimeDisplayMessage[], title: string): void {

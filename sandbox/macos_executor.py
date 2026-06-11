@@ -126,15 +126,9 @@ class SecureMacOSSandboxExecutor:
         network_policy: NetworkPolicy,
         timeout_seconds: int | None = None,
         cwd: Path | None = None,
+        sandbox_enabled: bool = True,
     ) -> CommandExecResult:
         """在受限 Seatbelt profile 下执行 shell 命令。"""
-
-        if platform.system() != "Darwin":
-            return CommandExecResult(False, 127, "", "macOS 原生沙箱仅支持 Darwin/macOS")
-
-        sandbox_exec = shutil.which(self.sandbox_exec_path) or shutil.which("sandbox-exec")
-        if not sandbox_exec:
-            return CommandExecResult(False, 127, "", "sandbox-exec 不可用，无法启用 macOS 原生沙箱")
 
         if not self.selected_root.exists() or not self.selected_root.is_dir():
             return CommandExecResult(False, 127, "", f"所选工作区无效: {self.selected_root}")
@@ -145,6 +139,16 @@ class SecureMacOSSandboxExecutor:
             return CommandExecResult(False, 127, "", f"命令工作目录无效: {exc}")
 
         shell_command = f"set -eu; cd {shlex.quote(command_cwd.as_posix())}; {command}"
+        if not sandbox_enabled:
+            return self._run_without_sandbox(shell_command, command_cwd, timeout_seconds)
+
+        if platform.system() != "Darwin":
+            return CommandExecResult(False, 127, "", "macOS 原生沙箱仅支持 Darwin/macOS")
+
+        sandbox_exec = shutil.which(self.sandbox_exec_path) or shutil.which("sandbox-exec")
+        if not sandbox_exec:
+            return CommandExecResult(False, 127, "", "sandbox-exec 不可用，无法启用 macOS 原生沙箱")
+
         try:
             # 使用 /bin/sh -lc 保持与终端 shell 命令接近的行为，同时由 Seatbelt 限制写入。
             proc = subprocess.run(
@@ -183,6 +187,39 @@ class SecureMacOSSandboxExecutor:
             proc.returncode,
             proc.stdout,
             stderr,
+        )
+
+    def _run_without_sandbox(
+        self,
+        shell_command: str,
+        cwd: Path,
+        timeout_seconds: int | None,
+    ) -> CommandExecResult:
+        """完全访问模式下直接执行命令，不套 macOS Seatbelt。"""
+
+        try:
+            proc = subprocess.run(
+                ["/bin/sh", "-lc", shell_command],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds or self.timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return CommandExecResult(
+                False,
+                124,
+                exc.stdout or "",
+                (exc.stderr or "") + "\n命令执行超时",
+            )
+        except OSError as exc:
+            return CommandExecResult(False, 127, "", f"命令执行失败: {exc}")
+
+        return CommandExecResult(
+            proc.returncode == 0,
+            proc.returncode,
+            proc.stdout,
+            proc.stderr,
         )
 
 

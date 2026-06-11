@@ -1,5 +1,9 @@
 export type RuntimeSessionState = {
   status: 'active' | 'suspended'
+  turn_in_progress: boolean
+  active_turn_id: string | null
+  turn_started_at: number | null
+  cancellation_requested: boolean
   suspended: boolean
   suspended_category: string | null
   suspended_detail: string | null
@@ -7,6 +11,7 @@ export type RuntimeSessionState = {
 }
 
 export type RuntimeReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'max'
+export type RuntimePermissionMode = 'request_approval' | 'auto_approve' | 'full_access' | 'custom'
 
 export type RuntimeModelConfig = {
   default_model: string
@@ -41,10 +46,11 @@ export type RuntimeAdditionalRoot = {
 }
 
 export type RuntimeWorkspacePolicy = {
-  source: 'defaults' | 'project_config'
+  source: 'defaults' | 'project_config' | 'runtime_mode'
   config_path: string | null
+  permission_mode: RuntimePermissionMode
   permission_profile: 'read_only' | 'workspace_write' | 'danger_no_sandbox'
-  approval_policy: 'ask-before-mutating' | 'never'
+  approval_policy: 'ask-before-mutating' | 'auto' | 'never'
   network_policy: 'restricted' | 'enabled'
   exec_rule_count: number
 }
@@ -182,9 +188,16 @@ export type WorkspacePolicyChangedEvent = RuntimeEventBase & {
   previous_workspace: RuntimeWorkspace
   workspace: RuntimeWorkspace
   session_state: RuntimeSessionState
-  reason: 'change_directory' | 'add_dir' | 'trust_workspace' | 'untrust_workspace' | string
+  reason:
+    | 'change_directory'
+    | 'add_dir'
+    | 'trust_workspace'
+    | 'untrust_workspace'
+    | 'set_permission_mode'
+    | string
   current_dir?: string
   added_root?: RuntimeAdditionalRoot
+  permission_mode?: RuntimePermissionMode
 }
 
 export type AssistantTokenEvent = RuntimeEventBase & {
@@ -234,7 +247,13 @@ export type ClarificationResponseAckEvent = RuntimeEventBase & {
 }
 
 export type SessionStateEvent = RuntimeEventBase & {
-  type: 'session_suspended' | 'session_blocked' | 'session_resumed'
+  type:
+    | 'session_suspended'
+    | 'session_blocked'
+    | 'session_resumed'
+    | 'session_busy'
+    | 'turn_cancelling'
+    | 'turn_cancelled'
   detail?: string
   category?: string
   previous_state?: RuntimeSessionState
@@ -259,6 +278,7 @@ export type RuntimeErrorEvent = RuntimeEventBase & {
   received_request_id?: string
   requested_workspace?: string
   requested_path?: string
+  requested_permission_mode?: RuntimePermissionMode | string
   workspace?: RuntimeWorkspace
 }
 
@@ -347,6 +367,11 @@ export type RuntimeClientPacket =
       turn_id?: string
     }
   | {
+      type: 'cancel_turn'
+      request_id?: string
+      turn_id?: string
+    }
+  | {
       type: 'open_workspace'
       path: string
       request_id?: string
@@ -367,6 +392,12 @@ export type RuntimeClientPacket =
     }
   | {
       type: 'trust_workspace' | 'untrust_workspace'
+      request_id?: string
+      turn_id?: string
+    }
+  | {
+      type: 'set_permission_mode'
+      mode: RuntimePermissionMode
       request_id?: string
       turn_id?: string
     }

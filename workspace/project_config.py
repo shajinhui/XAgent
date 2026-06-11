@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 from security.exec_policy import ExecPolicy, ExecPolicyRule
 from security.permissions import ApprovalPolicy, NetworkPolicy, PermissionProfile
-from workspace.models import WorkspaceTrust, WorkspaceValidationError
+from workspace.models import PermissionMode, WorkspaceTrust, WorkspaceValidationError
 
 
 PROJECT_CONFIG_RELATIVE_PATH = Path(".codex-mini") / "config.toml"
@@ -59,8 +59,9 @@ _BROAD_ALLOW_PREFIX_HEADS = {
 class ProjectPolicyConfig:
     """从 system defaults 或 trusted project config 得到的运行策略。"""
 
-    source: Literal["defaults", "project_config"] = "defaults"
+    source: Literal["defaults", "project_config", "runtime_mode"] = "defaults"
     config_path: Path | None = None
+    permission_mode: PermissionMode = PermissionMode.REQUEST_APPROVAL
     permission_profile: PermissionProfile = PermissionProfile.WORKSPACE_WRITE
     approval_policy: ApprovalPolicy = ApprovalPolicy.ASK_BEFORE_MUTATING
     network_policy: NetworkPolicy = NetworkPolicy.RESTRICTED
@@ -72,6 +73,7 @@ class ProjectPolicyConfig:
         return {
             "source": self.source,
             "config_path": self.config_path.as_posix() if self.config_path else None,
+            "permission_mode": self.permission_mode.value,
             "permission_profile": self.permission_profile.value,
             "approval_policy": self.approval_policy.value,
             "network_policy": self.network_policy.value,
@@ -112,6 +114,7 @@ def load_project_policy(project_root: Path, trust: WorkspaceTrust) -> ProjectPol
     return ProjectPolicyConfig(
         source="project_config",
         config_path=config_path,
+        permission_mode=PermissionMode.CUSTOM,
         permission_profile=_parse_permission_profile(permissions.get("profile"), config_path),
         approval_policy=_parse_approval_policy(permissions.get("approval_policy"), config_path),
         network_policy=_parse_network_policy(permissions.get("network"), config_path),

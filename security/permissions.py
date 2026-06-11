@@ -23,6 +23,7 @@ class ApprovalPolicy(StrEnum):
     """When mutating or risky actions must ask the user."""
 
     ASK_BEFORE_MUTATING = "ask-before-mutating"
+    AUTO = "auto"
     NEVER = "never"
 
 
@@ -83,6 +84,24 @@ class FileSystemPolicy:
             current_dir=current_dir,
             readable_roots=tuple(readable_roots),
             writable_roots=(selected_root, *tuple(writable_roots)),
+        )
+
+    @classmethod
+    def danger_full_access(
+        cls,
+        selected_root: Path,
+        *,
+        current_dir: Path | None = None,
+    ) -> "FileSystemPolicy":
+        """用户显式选择完全访问后，允许访问本机文件系统。"""
+
+        return cls(
+            selected_root=selected_root,
+            current_dir=current_dir,
+            readable_roots=(Path("/"),),
+            writable_roots=(Path("/"),),
+            deny_read_names=(),
+            deny_write_names=(),
         )
 
     @classmethod

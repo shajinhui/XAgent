@@ -14,14 +14,25 @@ from context_manager import ContextManager
 from session import SessionStore, recover_session_messages
 from security.exec_policy import ExecPolicy, ExecPolicyRule
 from server.runtime.session_allowlist import recover_session_allow_rules
-from server.runtime.session_state import SessionRuntimeState, create_websocket_session
+from server.runtime.session_state import (
+    SessionRuntimeState,
+    create_websocket_session,
+    recover_session_runtime_state,
+)
 from server.views.session_summary import session_display_messages, summarize_session_record
 from tools.core.catalog import build_default_registry
 from tools.core.registry import ToolRegistry
 from tools.core.runner import ToolRunner, create_tool_context
-from workspace import TrustLevel, WorkspaceContext, WorkspaceManager, WorkspaceValidationError
+from workspace import (
+    PermissionMode,
+    TrustLevel,
+    WorkspaceContext,
+    WorkspaceManager,
+    WorkspaceValidationError,
+)
 from workspace.instructions import render_system_prompt_with_project_instructions
-from workspace.project_config import default_project_policy
+from workspace.permission_modes import policy_for_permission_mode
+from workspace.project_config import default_project_policy, load_project_policy
 
 
 @dataclass
@@ -41,6 +52,7 @@ class WebSocketRuntimeContext:
     registry: ToolRegistry
     runner: ToolRunner
     history: ContextManager
+    permission_mode: PermissionMode = PermissionMode.REQUEST_APPROVAL
     session_persisted: bool = False
 
     @property
@@ -61,6 +73,7 @@ class WebSocketRuntimeContext:
 
         workspace_manager = WorkspaceManager(project_root)
         workspace = workspace_manager.open()
+        _apply_permission_mode_to_workspace(workspace, PermissionMode.REQUEST_APPROVAL)
         session_store = _require_session_store(workspace)
         session_id, session_state, registry, runner, history = create_websocket_session(
             workspace,
@@ -93,8 +106,10 @@ class WebSocketRuntimeContext:
 
         previous_workspace = self.workspace.as_dict()
         previous_state = self.session_state.as_dict()
-        self.workspace = self.workspace_manager.open(path)
-        self.session_store = _require_session_store(self.workspace)
+        next_workspace = self.workspace_manager.open(path)
+        self._apply_permission_mode_to_workspace(next_workspace)
+        self.workspace = next_workspace
+        self.session_store = _require_session_store(next_workspace)
         self.session_id, self.session_state, self.registry, self.runner, self.history = (
             create_websocket_session(self.workspace, self.system_prompt)
         )
@@ -133,15 +148,38 @@ class WebSocketRuntimeContext:
         selected_root = self.workspace.selected_root
         current_dir = self.workspace.current_dir
         additional_roots = list(self.workspace.additional_roots)
-        self.workspace = self.workspace_manager.open(selected_root, trust_override=trust)
-        self.workspace.additional_roots = additional_roots
-        self.workspace.change_current_dir(current_dir)
-        self.session_store = _require_session_store(self.workspace)
+        next_workspace = self.workspace_manager.open(selected_root, trust_override=trust)
+        next_workspace.additional_roots = additional_roots
+        next_workspace.change_current_dir(current_dir)
+        self._apply_permission_mode_to_workspace(next_workspace)
+        self.workspace = next_workspace
+        self.session_store = _require_session_store(next_workspace)
         # trust 边界变化时不继承旧 exec policy，避免保留已撤销的项目策略规则。
-        project_policy = self.workspace.project_policy or default_project_policy()
+        project_policy = next_workspace.project_policy or default_project_policy()
         self.refresh_tool_runner(exec_policy=project_policy.exec_policy)
         self.refresh_history_system_prompt()
         return previous_workspace
+
+    def change_permission_mode(self, mode: PermissionMode) -> Dict[str, Any]:
+        """应用用户显式选择的权限模式，并刷新工具运行边界。"""
+
+        previous_workspace = self.workspace.as_dict()
+        self._apply_permission_mode_to_workspace(self.workspace, mode=mode)
+        self.permission_mode = mode
+        self.refresh_tool_runner(exec_policy=self.workspace.project_policy.exec_policy)
+        self.refresh_history_system_prompt()
+        return previous_workspace
+
+    def _apply_permission_mode_to_workspace(
+        self,
+        workspace: WorkspaceContext,
+        *,
+        mode: PermissionMode | None = None,
+    ) -> None:
+        """把连接级权限模式应用到指定 workspace。"""
+
+        target_mode = mode or self.permission_mode
+        _apply_permission_mode_to_workspace(workspace, target_mode)
 
     def current_system_prompt(self) -> str:
         """按当前 workspace 生成模型可见 system prompt。"""
@@ -189,10 +227,12 @@ class WebSocketRuntimeContext:
 
         target_record = self.session_store.get_session(session_id)
         target_events = self.session_store.load_events(session_id)
-        self.workspace = self.workspace_manager.restore_from_snapshot(
+        restored_workspace = self.workspace_manager.restore_from_snapshot(
             _workspace_snapshot_from_session(target_record.metadata or {}, target_events)
         )
-        self.session_store = _require_session_store(self.workspace)
+        self._apply_permission_mode_to_workspace(restored_workspace)
+        self.workspace = restored_workspace
+        self.session_store = _require_session_store(restored_workspace)
         self.history = ContextManager.from_messages(
             recover_session_messages(
                 self.session_store,
@@ -201,7 +241,7 @@ class WebSocketRuntimeContext:
             )
         )
         self.session_id = session_id
-        self.session_state = SessionRuntimeState(session_id=session_id)
+        self.session_state = recover_session_runtime_state(session_id, target_events)
         self.registry = build_default_registry()
         project_policy = self.workspace.project_policy or default_project_policy()
         session_allow_rules = recover_session_allow_rules(
@@ -241,6 +281,17 @@ def _require_session_store(workspace: WorkspaceContext) -> SessionStore:
     return workspace.session_store
 
 
+def _apply_permission_mode_to_workspace(
+    workspace: WorkspaceContext,
+    mode: PermissionMode,
+) -> None:
+    """把全局权限模式投影成当前 workspace 的实际执行策略。"""
+
+    assert workspace.trust is not None
+    project_policy = load_project_policy(workspace.project_root, workspace.trust)
+    workspace.project_policy = policy_for_permission_mode(mode, project_policy)
+
+
 def _workspace_snapshot_from_session(
     metadata: Dict[str, Any],
     events: list[Any],
@@ -269,4 +320,7 @@ def _exec_policy_with_session_allow(
 
     if not session_allow_rules:
         return base_policy
-    return ExecPolicy((*base_policy.rules, *session_allow_rules))
+    return ExecPolicy(
+        (*base_policy.rules, *session_allow_rules),
+        protect_paths=base_policy.protect_paths,
+    )

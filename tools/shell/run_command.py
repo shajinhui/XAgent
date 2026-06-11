@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from security import ApprovalPolicy
 from security.exec_policy import CommandDecision
+from security.permissions import PermissionProfile
 from tools.core.types import ToolExecutionContext, ToolMeta, ToolPermissionError
 
 
@@ -123,6 +124,7 @@ def run(ctx: ToolExecutionContext, payload: dict) -> str:
         network_policy=ctx.network_policy,
         timeout_seconds=args.timeout,
         cwd=command_cwd,
+        sandbox_enabled=ctx.permission_profile != PermissionProfile.DANGER_NO_SANDBOX,
     )
     if result.ok:
         ctx.circuit_breaker.record_success(ctx.session_id, "dangerous_shell")

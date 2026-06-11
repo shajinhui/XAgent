@@ -13,7 +13,7 @@ def recover_session_allow_rules(
     events: list[TranscriptEvent],
     current_workspace: dict[str, Any],
 ) -> tuple[ExecPolicyRule, ...]:
-    """恢复与当前 workspace 快照完全一致的 session-scoped 命令 allow 规则。"""
+    """恢复与当前 workspace 安全边界一致的 session-scoped 命令 allow 规则。"""
 
     rules: list[ExecPolicyRule] = []
     seen: set[tuple[str, ...]] = set()
@@ -28,8 +28,8 @@ def recover_session_allow_rules(
         event_workspace = payload.get("workspace")
         if not isinstance(event_workspace, dict):
             raise WorkspaceValidationError("permission_decision 缺少 workspace snapshot")
-        if event_workspace != current_workspace:
-            # 权限批准只在当时的 workspace 边界内有效；恢复时不跨 cwd/additional roots/trust 继承。
+        if not _same_workspace_boundary(event_workspace, current_workspace):
+            # 权限批准只绑定工作区安全边界；全局 permission mode 不参与匹配。
             continue
 
         prefix = _parse_prefix_rule(payload.get("prefix_rule"))
@@ -39,6 +39,32 @@ def recover_session_allow_rules(
         rules.append(ExecPolicyRule.allow(*prefix))
 
     return tuple(rules)
+
+
+_WORKSPACE_BOUNDARY_KEYS = (
+    "selected_root",
+    "project_root",
+    "current_dir",
+    "git_root",
+    "trust",
+    "additional_roots",
+)
+
+
+def _same_workspace_boundary(
+    event_workspace: dict[str, Any],
+    current_workspace: dict[str, Any],
+) -> bool:
+    """只比较会影响文件/命令授权边界的 workspace 字段。"""
+
+    for key in _WORKSPACE_BOUNDARY_KEYS:
+        if key not in event_workspace:
+            raise WorkspaceValidationError(f"permission_decision workspace 缺少字段: {key}")
+        if key not in current_workspace:
+            raise WorkspaceValidationError(f"当前 workspace 缺少字段: {key}")
+        if event_workspace[key] != current_workspace[key]:
+            return False
+    return True
 
 
 def _is_session_command_allow(payload: dict[str, Any]) -> bool:

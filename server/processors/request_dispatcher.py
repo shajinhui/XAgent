@@ -15,7 +15,7 @@ from server.protocol.events import build_event
 from server.runtime.transcript_events import record_transcript_event
 from server.runtime.websocket_context import WebSocketRuntimeContext
 from server.views.session_summary import list_session_summaries
-from workspace import TrustLevel, WorkspaceValidationError
+from workspace import PermissionMode, TrustLevel, WorkspaceValidationError
 
 
 class WebSocketRequestDispatcher:
@@ -75,6 +75,9 @@ class WebSocketRequestDispatcher:
         if packet_type == "untrust_workspace":
             await self._handle_workspace_trust_change(packet, TrustLevel.UNTRUSTED)
             return True
+        if packet_type == "set_permission_mode":
+            await self._handle_permission_mode_change(packet)
+            return True
         if packet_type == "new_session":
             await self._handle_new_session(packet)
             return True
@@ -89,6 +92,9 @@ class WebSocketRequestDispatcher:
             return True
         if packet_type == "conversation_title_request":
             await self._handle_conversation_title_request(packet)
+            return True
+        if packet_type == "cancel_turn":
+            await self._handle_cancel_turn(packet)
             return True
 
         await self._send_error(
@@ -281,6 +287,50 @@ class WebSocketRequestDispatcher:
             request_id=request_id,
             previous_workspace=previous_workspace,
             reason=reason,
+        )
+
+    async def _handle_permission_mode_change(self, packet: Dict[str, Any]) -> None:
+        """切换当前连接的权限模式，并刷新工具执行边界。"""
+
+        request_id = _request_id(packet)
+        raw_mode = str(packet.get("mode") or "").strip()
+        try:
+            mode = PermissionMode(raw_mode)
+            previous_workspace = self.context.change_permission_mode(mode)
+        except WorkspaceValidationError as exc:
+            await self._record_runtime_error(
+                packet,
+                request_id=request_id,
+                message=str(exc),
+                requested_permission_mode=raw_mode,
+            )
+            await self.ws.send_json(
+                build_event(
+                    "workspace_error",
+                    self.context.session_id,
+                    _turn_id(packet),
+                    request_id=request_id,
+                    message=str(exc),
+                    requested_permission_mode=raw_mode,
+                    workspace=self.context.workspace.as_dict(),
+                )
+            )
+            return
+        except ValueError:
+            await self._send_error(
+                packet,
+                request_id=request_id,
+                message=f"unsupported permission mode: {raw_mode}",
+                requested_permission_mode=raw_mode,
+            )
+            return
+
+        await self._send_workspace_policy_changed(
+            packet,
+            request_id=request_id,
+            previous_workspace=previous_workspace,
+            reason="set_permission_mode",
+            permission_mode=mode.value,
         )
 
     async def _handle_new_session(self, packet: Dict[str, Any]) -> None:
@@ -518,6 +568,28 @@ class WebSocketRequestDispatcher:
                     "model": title_model,
                 },
             )
+
+    async def _handle_cancel_turn(self, packet: Dict[str, Any]) -> None:
+        """处理空闲状态下的取消请求；执行中取消由 turn runner 等待点消费。"""
+
+        if self.context.session_state.active_turn_id:
+            self.context.session_state.request_cancellation()
+            await self.ws.send_json(
+                build_event(
+                    "turn_cancelling",
+                    self.context.session_id,
+                    self.context.session_state.active_turn_id,
+                    request_id=_request_id(packet),
+                    session_state=self.context.session_state.as_dict(),
+                )
+            )
+            return
+
+        await self._send_error(
+            packet,
+            request_id=_request_id(packet),
+            message="no active turn to cancel",
+        )
 
     async def _send_workspace_policy_changed(
         self,

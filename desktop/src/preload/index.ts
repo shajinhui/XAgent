@@ -1,5 +1,9 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
+
+export type ThemeMode = 'system' | 'light' | 'dark'
+export type ResolvedTheme = 'light' | 'dark'
+export type ThemeState = { mode: ThemeMode; resolved: ResolvedTheme }
 
 // Custom APIs for renderer
 const api = {
@@ -8,6 +12,19 @@ const api = {
   },
   createDefaultChatDirectory(): Promise<string> {
     return ipcRenderer.invoke('workspace:create-default-chat-directory')
+  },
+  getTheme(): Promise<ThemeState> {
+    return ipcRenderer.invoke('theme:get')
+  },
+  setThemeMode(mode: ThemeMode): Promise<ThemeState> {
+    return ipcRenderer.invoke('theme:set-mode', mode)
+  },
+  onThemeChanged(callback: (state: ThemeState) => void): () => void {
+    const listener = (_event: IpcRendererEvent, state: ThemeState): void => {
+      callback(state)
+    }
+    ipcRenderer.on('theme:changed', listener)
+    return () => ipcRenderer.removeListener('theme:changed', listener)
   }
 }
 

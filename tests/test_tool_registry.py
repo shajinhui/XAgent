@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from sandbox.macos_executor import CommandExecResult
-from security import ApprovalPolicy, ExecPolicy
+from security import ApprovalPolicy, ExecPolicy, PermissionProfile
 from tools.core.catalog import build_default_registry, builtin_tools
 from tools.core.protocol import FunctionTool
 from tools.core.registry import ToolRegistry as CoreToolRegistry
@@ -280,6 +280,33 @@ class ToolRegistryTests(unittest.TestCase):
             self.assertEqual(result.metadata["permission_action"], "deny")
             self.assertEqual(result.metadata["category"], "approval_unavailable")
 
+    def test_edit_file_dry_run_returns_diff_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "sample.txt"
+            target.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+            _registry, runner = build_default_runner(root)
+
+            result = runner.execute(
+                "edit_file",
+                json.dumps(
+                    {
+                        "path": "sample.txt",
+                        "start_line": 2,
+                        "end_line": 2,
+                        "replacement": "BETA",
+                        "dry_run": True,
+                    }
+                ),
+                approved=True,
+            )
+
+            self.assertTrue(result.ok)
+            self.assertEqual(target.read_text(encoding="utf-8"), "alpha\nbeta\ngamma\n")
+            self.assertEqual(result.metadata["dry_run"], True)
+            self.assertIn("-beta", result.content)
+            self.assertIn("+BETA", result.content)
+
     def test_run_command_invalid_cwd_is_denied(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             _registry, runner = build_default_runner(Path(tmp))
@@ -367,6 +394,48 @@ class ToolRegistryTests(unittest.TestCase):
 
             self.assertTrue(result.ok)
             self.assertEqual((root / "created.txt").read_text(encoding="utf-8"), "hello")
+
+    def test_auto_approval_policy_runs_mutating_file_tool_without_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            registry = build_default_registry()
+            runner = ToolRunner(
+                registry,
+                create_tool_context(root, approval_policy=ApprovalPolicy.AUTO),
+            )
+
+            result = runner.execute(
+                "write_file",
+                json.dumps({"path": "created.txt", "content": "hello"}),
+            )
+
+            self.assertTrue(result.ok)
+            self.assertEqual((root / "created.txt").read_text(encoding="utf-8"), "hello")
+
+    def test_full_access_profile_allows_file_tool_outside_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace"
+            outside = Path(tmp) / "outside"
+            workspace.mkdir()
+            outside.mkdir()
+            registry = build_default_registry()
+            runner = ToolRunner(
+                registry,
+                create_tool_context(
+                    workspace,
+                    approval_policy=ApprovalPolicy.AUTO,
+                    permission_profile=PermissionProfile.DANGER_NO_SANDBOX,
+                ),
+            )
+
+            target = outside / "created.txt"
+            result = runner.execute(
+                "write_file",
+                json.dumps({"path": target.as_posix(), "content": "hello"}),
+            )
+
+            self.assertTrue(result.ok)
+            self.assertEqual(target.read_text(encoding="utf-8"), "hello")
 
     def test_read_file_denies_env_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

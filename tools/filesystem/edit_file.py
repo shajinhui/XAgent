@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import difflib
+
 from pydantic import BaseModel, Field
 
-from tools.core.types import ToolExecutionContext, ToolMeta
+from tools.core.types import ToolExecutionContext, ToolMeta, ToolResult
 
 
 META = ToolMeta(
@@ -23,6 +25,7 @@ class EditFileArgs(BaseModel):
     start_line: int = Field(..., ge=1, description="起始行（1-based）")
     end_line: int = Field(..., ge=1, description="结束行（1-based, 包含）")
     replacement: str = Field(..., description="替换文本")
+    dry_run: bool = Field(False, description="为 true 时只返回预览 diff，不写入文件")
 
 
 def schema() -> dict:
@@ -38,7 +41,7 @@ def schema() -> dict:
     }
 
 
-def run(ctx: ToolExecutionContext, payload: dict) -> str:
+def run(ctx: ToolExecutionContext, payload: dict) -> str | ToolResult:
     """按 1-based 行号替换文件片段；写入前做路径和范围校验。"""
 
     args = EditFileArgs(**payload)
@@ -54,7 +57,29 @@ def run(ctx: ToolExecutionContext, payload: dict) -> str:
 
     # split 会丢掉分隔符，这里统一补回换行以保持文件行结构。
     replacement_lines = [line + "\n" for line in args.replacement.split("\n")]
-    lines[args.start_line - 1 : args.end_line] = replacement_lines
+    updated_lines = list(lines)
+    updated_lines[args.start_line - 1 : args.end_line] = replacement_lines
+    if args.dry_run:
+        diff = "".join(
+            difflib.unified_diff(
+                lines,
+                updated_lines,
+                fromfile=path.as_posix(),
+                tofile=path.as_posix(),
+            )
+        )
+        return ToolResult(
+            ok=True,
+            content=diff or f"无变更: {path}",
+            metadata={
+                "dry_run": True,
+                "path": path.as_posix(),
+                "start_line": args.start_line,
+                "end_line": args.end_line,
+            },
+        )
+
+    lines = updated_lines
     path.write_text("".join(lines), encoding="utf-8")
 
     return f"已编辑文件: {path} (lines {args.start_line}-{args.end_line})"

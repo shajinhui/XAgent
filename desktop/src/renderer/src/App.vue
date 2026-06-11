@@ -1,5 +1,25 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, type Component } from 'vue'
+import {
+  Blocks,
+  Bot,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Clock3,
+  ExternalLink,
+  Folder,
+  FolderPlus,
+  Info,
+  MessageSquarePlus,
+  Palette,
+  PanelLeft,
+  Plus,
+  Search,
+  Settings as SettingsIcon,
+  Shield,
+  Trash2
+} from 'lucide-vue-next'
 import ChatComposer from '@renderer/components/ChatComposer.vue'
 import ClarificationDialog from '@renderer/components/ClarificationDialog.vue'
 import MessageList from '@renderer/components/MessageList.vue'
@@ -7,10 +27,20 @@ import PermissionDialog from '@renderer/components/PermissionDialog.vue'
 import TitleBar from '@renderer/components/TitleBar.vue'
 import { useChatStore } from '@renderer/stores/chat'
 import { useRuntimeStore } from '@renderer/stores/runtime'
+import { useThemeStore } from '@renderer/stores/theme'
 import type { RuntimeSessionSummary, RuntimeWorkspaceProject } from '@renderer/types/runtimeEvents'
+import type { ThemeMode } from '../../preload'
 
 type ConversationSessionItem = RuntimeSessionSummary & {
   selectedRoot: string
+}
+
+type MainView = 'chat' | 'settings'
+type SettingsSection = 'appearance' | 'model' | 'permissions' | 'workspace' | 'about'
+type SettingsSectionItem = {
+  id: SettingsSection
+  label: string
+  icon: Component
 }
 
 type SessionContextMenu = {
@@ -22,20 +52,42 @@ type SessionContextMenu = {
 
 const chat = useChatStore()
 const runtime = useRuntimeStore()
+const theme = useThemeStore()
 const sidebarOpen = ref(true)
 const sidebarWidth = ref(286)
 const projectsExpanded = ref(true)
 const collapsedProjectRoots = ref<Set<string>>(new Set())
 const isResizingSidebar = ref(false)
 const sessionContextMenu = ref<SessionContextMenu | null>(null)
+const mainView = ref<MainView>('chat')
+const settingsSection = ref<SettingsSection>('appearance')
 const SIDEBAR_MIN_WIDTH = 248
 const SIDEBAR_MAX_WIDTH = 360
 const SIDEBAR_WIDTH_STORAGE_KEY = 'codex-mini.sidebar-width'
+const settingSections: SettingsSectionItem[] = [
+  { id: 'appearance', label: '外观', icon: Palette },
+  { id: 'model', label: '模型', icon: Bot },
+  { id: 'permissions', label: '权限', icon: Shield },
+  { id: 'workspace', label: '工作区', icon: Folder },
+  { id: 'about', label: '关于', icon: Info }
+]
+const themeOptions: Array<{ mode: ThemeMode; label: string }> = [
+  { mode: 'system', label: '跟随系统' },
+  { mode: 'light', label: '浅色' },
+  { mode: 'dark', label: '深色' }
+]
 
 const visibleProjects = computed(() => runtime.workspaceProjects)
+const isSettingsView = computed(() => mainView.value === 'settings')
 const hasConversationStarted = computed(() =>
   chat.messages.some((message) => message.role === 'user')
 )
+const titleBarTitle = computed(() => (isSettingsView.value ? '设置' : chat.conversationTitle))
+const titleBarMessageCount = computed(() => (isSettingsView.value ? 0 : chat.messageCount))
+const themeStatus = computed(() => {
+  if (theme.mode !== 'system') return theme.label
+  return `跟随系统 · ${theme.resolved === 'dark' ? '深色' : '浅色'}`
+})
 const conversationSessions = computed<ConversationSessionItem[]>(() => {
   const candidates = runtime.conversationSelectedRoots.flatMap((root) => {
     const workspaceSessions =
@@ -65,7 +117,9 @@ const composerPlaceholder = computed(() => {
   return '输入消息...'
 })
 
-const composerDisabled = computed(() => runtime.isConnecting || runtime.isSuspended)
+const composerDisabled = computed(
+  () => runtime.isConnecting || runtime.isSuspended || Boolean(runtime.activeTurnId)
+)
 function toggleSidebar(): void {
   sidebarOpen.value = !sidebarOpen.value
 }
@@ -97,12 +151,19 @@ function sessionsForProject(root: string): RuntimeSessionSummary[] {
 }
 
 async function openProject(project: RuntimeWorkspaceProject): Promise<void> {
+  mainView.value = 'chat'
   if (runtime.workspace?.selected_root === project.selected_root) return
   await runtime.openWorkspace(project.selected_root)
 }
 
 async function startProjectConversation(project: RuntimeWorkspaceProject): Promise<void> {
+  mainView.value = 'chat'
   await runtime.startNewConversationInWorkspace(project.selected_root)
+}
+
+async function resumeConversation(root: string, sessionId: string): Promise<void> {
+  mainView.value = 'chat'
+  await runtime.resumeSessionInWorkspace(root, sessionId)
 }
 
 function clampSidebarWidth(value: number): number {
@@ -163,6 +224,12 @@ function openSessionContextMenu(
 
 function closeSessionContextMenu(): void {
   sessionContextMenu.value = null
+}
+
+function openSettings(section: SettingsSection = 'appearance'): void {
+  closeSessionContextMenu()
+  settingsSection.value = section
+  mainView.value = 'settings'
 }
 
 async function deleteContextSession(): Promise<void> {
@@ -248,6 +315,7 @@ async function untrustWorkspace(): Promise<void> {
 
 async function createDefaultConversationWorkspace(): Promise<void> {
   try {
+    mainView.value = 'chat'
     const workspacePath = await window.api.createDefaultChatDirectory()
     await runtime.openConversationWorkspace(workspacePath)
   } catch (error) {
@@ -307,19 +375,13 @@ onBeforeUnmount(() => {
           :aria-label="sidebarOpen ? '收起侧边栏' : '打开侧边栏'"
           @click="toggleSidebar"
         >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M4 5h16v14H4V5Zm6 0v14" />
-          </svg>
+          <PanelLeft />
         </button>
         <button class="sidebar-icon-button" type="button" aria-label="后退" disabled>
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="m15 6-6 6 6 6" />
-          </svg>
+          <ChevronLeft />
         </button>
         <button class="sidebar-icon-button" type="button" aria-label="前进" disabled>
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="m9 6 6 6-6 6" />
-          </svg>
+          <ChevronRight />
         </button>
       </div>
 
@@ -329,29 +391,19 @@ onBeforeUnmount(() => {
           class="sidebar-action active"
           @click="void createDefaultConversationWorkspace()"
         >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 5h7v7M18 13.5V19H5V6h5.5" />
-            <path d="m13 11 6-6" />
-          </svg>
+          <MessageSquarePlus />
           <span>新对话</span>
         </button>
         <button type="button" class="sidebar-action">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="m21 21-4.4-4.4M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z" />
-          </svg>
+          <Search />
           <span>搜索</span>
         </button>
         <button type="button" class="sidebar-action">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M4 7h4V3H4v4Zm12 0h4V3h-4v4ZM4 21h4v-4H4v4Zm12 0h4v-4h-4v4Z" />
-          </svg>
+          <Blocks />
           <span>插件</span>
         </button>
         <button type="button" class="sidebar-action">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 7v5l3 2" />
-            <path d="M21 12a9 9 0 1 1-9-9" />
-          </svg>
+          <Clock3 />
           <span>自动化</span>
         </button>
       </nav>
@@ -367,16 +419,11 @@ onBeforeUnmount(() => {
               @click="toggleProjectsExpanded"
             >
               <span>项目</span>
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="m7 10 5 5 5-5" />
-              </svg>
+              <ChevronDown />
             </button>
             <div class="sidebar-heading-actions" aria-label="项目操作">
               <button type="button" aria-label="打开工作区" @click="openWorkspaceFromDialog">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M4 19V5h7l2 2h7v12H4Z" />
-                  <path d="M12 11v5M9.5 13.5h5" />
-                </svg>
+                <FolderPlus />
               </button>
             </div>
           </div>
@@ -399,13 +446,9 @@ onBeforeUnmount(() => {
                   :aria-expanded="isProjectExpanded(project.selected_root)"
                   @click="toggleProjectConversation(project.selected_root)"
                 >
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M3.5 6.5h6l2 2h9v10h-17v-12Z" />
-                  </svg>
+                  <Folder />
                   <span>{{ project.display_name }}</span>
-                  <svg class="sidebar-project-chevron" viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="m7 10 5 5 5-5" />
-                  </svg>
+                  <ChevronDown class="sidebar-project-chevron" />
                 </button>
                 <button
                   type="button"
@@ -414,9 +457,7 @@ onBeforeUnmount(() => {
                   title="切换到项目"
                   @click="openProject(project)"
                 >
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M7 17 17 7M9 7h8v8" />
-                  </svg>
+                  <ExternalLink />
                 </button>
                 <button
                   type="button"
@@ -425,9 +466,7 @@ onBeforeUnmount(() => {
                   title="在此项目中新建会话"
                   @click="startProjectConversation(project)"
                 >
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M12 5v14M5 12h14" />
-                  </svg>
+                  <Plus />
                 </button>
               </div>
 
@@ -439,9 +478,7 @@ onBeforeUnmount(() => {
                   class="sidebar-item"
                   :class="{ selected: session.session_id === runtime.selectedSessionId }"
                   :title="session.last_message || session.title"
-                  @click="
-                    void runtime.resumeSessionInWorkspace(project.selected_root, session.session_id)
-                  "
+                  @click="void resumeConversation(project.selected_root, session.session_id)"
                   @contextmenu="openSessionContextMenu($event, session, project.selected_root)"
                 >
                   <span>{{ session.title }}</span>
@@ -480,9 +517,7 @@ onBeforeUnmount(() => {
                 title="创建普通对话目录"
                 @click="void createDefaultConversationWorkspace()"
               >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M12 5v14M5 12h14" />
-                </svg>
+                <Plus />
               </button>
             </div>
           </div>
@@ -493,7 +528,7 @@ onBeforeUnmount(() => {
             class="sidebar-item conversation-item"
             :class="{ selected: session.session_id === runtime.selectedSessionId }"
             :title="session.last_message || session.title"
-            @click="void runtime.resumeSessionInWorkspace(session.selectedRoot, session.session_id)"
+            @click="void resumeConversation(session.selectedRoot, session.session_id)"
             @contextmenu="openSessionContextMenu($event, session, session.selectedRoot)"
           >
             <span>{{ session.title }}</span>
@@ -506,15 +541,15 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <div class="sidebar-account">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8Z" />
-          <path
-            d="M4 12a8 8 0 0 1 .2-1.8l-1.7-1 2-3.5 1.8.7A8 8 0 0 1 8 5.4L8.3 3h4l.4 2.4a8 8 0 0 1 1.7 1l1.8-.7 2 3.5-1.7 1A8 8 0 0 1 16.7 12a8 8 0 0 1-.2 1.8l1.7 1-2 3.5-1.8-.7a8 8 0 0 1-1.7 1l-.4 2.4h-4L8 18.6a8 8 0 0 1-1.7-1l-1.8.7-2-3.5 1.7-1A8 8 0 0 1 4 12Z"
-          />
-        </svg>
+      <button
+        class="sidebar-account"
+        :class="{ active: isSettingsView }"
+        type="button"
+        @click="openSettings()"
+      >
+        <SettingsIcon />
         <span>设置</span>
-      </div>
+      </button>
 
       <div
         class="sidebar-resizer"
@@ -535,22 +570,23 @@ onBeforeUnmount(() => {
       @contextmenu.prevent
     >
       <button type="button" class="danger" role="menuitem" @click="void deleteContextSession()">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M4 7h16M10 11v6M14 11v6M9 7l1-2h4l1 2M6 7l1 14h10l1-14" />
-        </svg>
+        <Trash2 />
         <span>删除会话</span>
       </button>
     </div>
 
     <section
       class="chat-window"
-      :class="{ 'conversation-empty': !hasConversationStarted }"
+      :class="{
+        'conversation-empty': mainView === 'chat' && !hasConversationStarted,
+        'settings-active': isSettingsView
+      }"
       aria-label="Codex-mini chat preview"
     >
       <TitleBar
-        :title="chat.conversationTitle"
-        :title-status="chat.conversationTitleStatus"
-        :message-count="chat.messageCount"
+        :title="titleBarTitle"
+        :title-status="isSettingsView ? 'ready' : chat.conversationTitleStatus"
+        :message-count="titleBarMessageCount"
         :connection-status="runtime.connectionStatus"
         :is-suspended="runtime.isSuspended"
         :sidebar-open="sidebarOpen"
@@ -566,33 +602,140 @@ onBeforeUnmount(() => {
         @trust-workspace="trustWorkspace"
         @untrust-workspace="untrustWorkspace"
       />
-      <MessageList :messages="chat.messages" />
-      <div class="composer-zone">
-        <PermissionDialog
-          v-if="runtime.activePermission"
-          :request="runtime.activePermission"
-          @approve="runtime.approvePermission"
-          @deny="runtime.denyPermission"
-        />
-        <ClarificationDialog
-          v-else-if="runtime.activeClarification"
-          :request="runtime.activeClarification"
-          @answer="runtime.answerClarification"
-          @skip="runtime.skipClarification"
-        />
-        <ChatComposer
-          v-else
-          :disabled="composerDisabled"
-          :placeholder="composerPlaceholder"
-          :model="runtime.selectedModel"
-          :model-options="runtime.modelOptions"
-          :reasoning-effort="runtime.reasoningEffort"
-          :reasoning-options="runtime.reasoningEffortOptions"
-          @send="runtime.sendUserInput"
-          @update:model="runtime.setSelectedModel"
-          @update:reasoning-effort="runtime.setReasoningEffort"
-        />
+      <div v-if="isSettingsView" class="settings-page">
+        <nav class="settings-menu" aria-label="设置菜单">
+          <button
+            v-for="section in settingSections"
+            :key="section.id"
+            type="button"
+            class="settings-menu-item"
+            :class="{ active: settingsSection === section.id }"
+            @click="settingsSection = section.id"
+          >
+            <component :is="section.icon" />
+            <span>{{ section.label }}</span>
+          </button>
+        </nav>
+
+        <section class="settings-content" aria-label="设置内容">
+          <template v-if="settingsSection === 'appearance'">
+            <header class="settings-content-header">
+              <h2>外观</h2>
+              <p>{{ themeStatus }}</p>
+            </header>
+            <div class="settings-card">
+              <div class="settings-row">
+                <div class="settings-row-copy">
+                  <strong>主题</strong>
+                  <span>深色模式保持当前外观</span>
+                </div>
+                <div class="settings-segmented" role="group" aria-label="主题">
+                  <button
+                    v-for="option in themeOptions"
+                    :key="option.mode"
+                    type="button"
+                    :class="{ active: theme.mode === option.mode }"
+                    @click="void theme.setMode(option.mode)"
+                  >
+                    {{ option.label }}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <template v-else-if="settingsSection === 'model'">
+            <header class="settings-content-header">
+              <h2>模型</h2>
+              <p>{{ runtime.selectedModel }}</p>
+            </header>
+            <div class="settings-card">
+              <div class="settings-row">
+                <div class="settings-row-copy">
+                  <strong>思考程度</strong>
+                  <span>{{ runtime.reasoningEffort }}</span>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <template v-else-if="settingsSection === 'permissions'">
+            <header class="settings-content-header">
+              <h2>权限</h2>
+              <p>{{ runtime.permissionMode }}</p>
+            </header>
+            <div class="settings-card">
+              <div class="settings-row">
+                <div class="settings-row-copy">
+                  <strong>当前模式</strong>
+                  <span>{{ runtime.permissionMode }}</span>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <template v-else-if="settingsSection === 'workspace'">
+            <header class="settings-content-header">
+              <h2>工作区</h2>
+              <p>{{ runtime.workspace?.display_name || '未打开工作区' }}</p>
+            </header>
+            <div class="settings-card">
+              <div class="settings-row">
+                <div class="settings-row-copy">
+                  <strong>当前目录</strong>
+                  <span>{{ runtime.workspace?.current_dir || '-' }}</span>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <template v-else>
+            <header class="settings-content-header">
+              <h2>关于</h2>
+              <p>Codex-mini</p>
+            </header>
+            <div class="settings-card">
+              <div class="settings-row">
+                <div class="settings-row-copy">
+                  <strong>桌面端</strong>
+                  <span>Electron + Vue</span>
+                </div>
+              </div>
+            </div>
+          </template>
+        </section>
       </div>
+      <template v-else>
+        <MessageList :messages="chat.messages" />
+        <div class="composer-zone">
+          <PermissionDialog
+            v-if="runtime.activePermission"
+            :request="runtime.activePermission"
+            @approve="runtime.approvePermission"
+            @deny="runtime.denyPermission"
+          />
+          <ClarificationDialog
+            v-else-if="runtime.activeClarification"
+            :request="runtime.activeClarification"
+            @answer="runtime.answerClarification"
+            @skip="runtime.skipClarification"
+          />
+          <ChatComposer
+            v-else
+            :disabled="composerDisabled"
+            :placeholder="composerPlaceholder"
+            :model="runtime.selectedModel"
+            :model-options="runtime.modelOptions"
+            :reasoning-effort="runtime.reasoningEffort"
+            :reasoning-options="runtime.reasoningEffortOptions"
+            :permission-mode="runtime.permissionMode"
+            @send="runtime.sendUserInput"
+            @update:model="runtime.setSelectedModel"
+            @update:reasoning-effort="runtime.setReasoningEffort"
+            @update:permission-mode="runtime.setPermissionMode"
+          />
+        </div>
+      </template>
     </section>
   </main>
 </template>

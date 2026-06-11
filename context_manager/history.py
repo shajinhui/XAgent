@@ -18,7 +18,8 @@ class ContextManager:
     """
 
     def __init__(self, messages: Iterable[Dict[str, Any]] | None = None) -> None:
-        self._messages: List[Dict[str, Any]] = [dict(message) for message in messages or []]
+        # 使用浅拷贝减少开销，调用方需确保不修改原始 message
+        self._messages: List[Dict[str, Any]] = list(messages) if messages else []
 
     @classmethod
     def with_system_prompt(cls, system_prompt: str) -> "ContextManager":
@@ -36,8 +37,8 @@ class ContextManager:
         return self._messages
 
     def replace(self, messages: Iterable[Dict[str, Any]]) -> None:
-        """用新消息序列替换当前历史（会复制每条消息以避免外部引用）。"""
-        self._messages = [dict(message) for message in messages]
+        """用新消息序列替换当前历史（浅拷贝以提升性能）。"""
+        self._messages = list(messages)
 
     def replace_system_prompt(self, system_prompt: str) -> None:
         """更新首条 system 消息；没有 system 消息时插入到历史开头。"""

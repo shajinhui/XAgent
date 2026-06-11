@@ -8,6 +8,7 @@ import type {
   PermissionRequestEvent,
   RuntimeEvent,
   RuntimeModelConfig,
+  RuntimePermissionMode,
   RuntimeReasoningEffort,
   RuntimeSessionState,
   RuntimeSessionSummary,
@@ -24,10 +25,18 @@ const RECONNECT_DELAY_MS = 1500
 const WORKSPACE_PROJECTS_STORAGE_KEY = 'codex-mini.workspace-projects'
 const WORKSPACE_SESSIONS_STORAGE_KEY = 'codex-mini.workspace-sessions'
 const CONVERSATION_WORKSPACES_STORAGE_KEY = 'codex-mini.conversation-workspaces'
+const PERMISSION_MODE_STORAGE_KEY = 'codex-mini.permission-mode'
 const MAX_WORKSPACE_PROJECTS = 20
 const MAX_CONVERSATION_WORKSPACES = 12
 const FALLBACK_MODEL_OPTIONS = ['gpt-4o-mini']
 const FALLBACK_REASONING_OPTIONS: RuntimeReasoningEffort[] = ['off', 'low', 'medium', 'high', 'max']
+const DEFAULT_PERMISSION_MODE: RuntimePermissionMode = 'request_approval'
+const PERMISSION_MODES: RuntimePermissionMode[] = [
+  'request_approval',
+  'auto_approve',
+  'full_access',
+  'custom'
+]
 
 let runtimeSocket: RuntimeSocket | null = null
 let reconnectTimer: number | null = null
@@ -137,6 +146,30 @@ function formatToolDetail(value: unknown): string | undefined {
   } catch {
     return value
   }
+}
+
+function formatPermissionModeLabel(mode: RuntimePermissionMode | string | undefined): string {
+  if (mode === 'auto_approve') return '替我审批'
+  if (mode === 'full_access') return '完全访问'
+  if (mode === 'custom') return '自定义'
+  return '请求批准'
+}
+
+function normalizePermissionMode(value: unknown): RuntimePermissionMode | null {
+  return typeof value === 'string' && PERMISSION_MODES.includes(value as RuntimePermissionMode)
+    ? (value as RuntimePermissionMode)
+    : null
+}
+
+function loadGlobalPermissionMode(): RuntimePermissionMode {
+  return (
+    normalizePermissionMode(window.localStorage.getItem(PERMISSION_MODE_STORAGE_KEY)) ||
+    DEFAULT_PERMISSION_MODE
+  )
+}
+
+function saveGlobalPermissionMode(mode: RuntimePermissionMode): void {
+  window.localStorage.setItem(PERMISSION_MODE_STORAGE_KEY, mode)
 }
 
 function clearReconnectTimer(): void {
@@ -369,13 +402,15 @@ export const useRuntimeStore = defineStore('runtime', {
     modelOptions: [...FALLBACK_MODEL_OPTIONS],
     reasoningEffort: 'off' as RuntimeReasoningEffort,
     reasoningEffortOptions: [...FALLBACK_REASONING_OPTIONS],
+    globalPermissionMode: loadGlobalPermissionMode(),
     tools: {} as RuntimeToolMetadataMap,
     events: [] as RuntimeEvent[]
   }),
   getters: {
     isConnected: (state) => state.connectionStatus === 'connected',
     isConnecting: (state) => state.connectionStatus === 'connecting',
-    isSuspended: (state) => Boolean(state.sessionState?.suspended)
+    isSuspended: (state) => Boolean(state.sessionState?.suspended),
+    permissionMode: (state): RuntimePermissionMode => state.globalPermissionMode
   },
   actions: {
     applyModelConfig(config?: RuntimeModelConfig): void {
@@ -896,6 +931,52 @@ export const useRuntimeStore = defineStore('runtime', {
       })
     },
 
+    async setPermissionMode(mode: RuntimePermissionMode): Promise<void> {
+      const normalized = normalizePermissionMode(mode)
+      if (!normalized) return
+
+      if (!runtimeSocket?.isOpen) {
+        await this.connect({ silent: true })
+      }
+
+      if (!runtimeSocket?.isOpen) {
+        this.errorMessage = '后端还没有连接，无法切换权限模式。'
+        return
+      }
+
+      runtimeSocket.send({
+        type: 'set_permission_mode',
+        request_id: `permission-mode-${Date.now()}`,
+        mode: normalized
+      })
+    },
+
+    syncGlobalPermissionMode(): void {
+      if (!runtimeSocket?.isOpen || !this.workspace) return
+
+      const activeMode = this.workspace.policy?.permission_mode || DEFAULT_PERMISSION_MODE
+      if (activeMode === this.globalPermissionMode) return
+
+      runtimeSocket.send({
+        type: 'set_permission_mode',
+        request_id: `permission-mode-sync-${Date.now()}`,
+        mode: this.globalPermissionMode
+      })
+    },
+
+    cancelTurn(): void {
+      if (!runtimeSocket?.isOpen) {
+        this.errorMessage = '后端还没有连接，无法取消当前回合。'
+        return
+      }
+
+      runtimeSocket.send({
+        type: 'cancel_turn',
+        request_id: `cancel-turn-${Date.now()}`,
+        turn_id: this.activeTurnId || this.sessionState?.active_turn_id || undefined
+      })
+    },
+
     sendPermissionDecision(
       approved: boolean,
       feedback?: string,
@@ -967,6 +1048,7 @@ export const useRuntimeStore = defineStore('runtime', {
               this.sessionsBySelectedRoot[normalizeSelectedRoot(this.workspace.selected_root)] || []
           }
           chat.addSystemMessage(`已连接后端：${event.session_id}`)
+          this.syncGlobalPermissionMode()
           this.requestSessions()
           this.requestConversationTitle()
           break
@@ -1003,6 +1085,7 @@ export const useRuntimeStore = defineStore('runtime', {
             this.pendingWorkspaceResume = null
             void this.resumeSession(sessionId)
           }
+          this.syncGlobalPermissionMode()
           break
         case 'workspace_policy_changed':
           this.sessionState = event.session_state
@@ -1020,6 +1103,19 @@ export const useRuntimeStore = defineStore('runtime', {
             chat.addSystemMessage('已信任当前项目：后端会读取白名单内的项目策略配置。')
           } else if (event.reason === 'untrust_workspace') {
             chat.addSystemMessage('已取消信任当前项目：后端将忽略项目本地策略配置。')
+          } else if (event.reason === 'set_permission_mode') {
+            const nextMode = normalizePermissionMode(
+              event.permission_mode || event.workspace.policy?.permission_mode
+            )
+            if (nextMode) {
+              this.globalPermissionMode = nextMode
+              saveGlobalPermissionMode(nextMode)
+            }
+            if (!String(event.request_id || '').startsWith('permission-mode-sync-')) {
+              chat.addSystemMessage(
+                `权限模式已切换：${formatPermissionModeLabel(event.workspace.policy?.permission_mode)}`
+              )
+            }
           }
           break
         case 'turn_started':
@@ -1041,6 +1137,7 @@ export const useRuntimeStore = defineStore('runtime', {
           this.activePermission = null
           this.activeClarification = null
           chat.resetConversation()
+          this.syncGlobalPermissionMode()
           this.requestSessions()
           break
         case 'sessions_list':
@@ -1143,8 +1240,21 @@ export const useRuntimeStore = defineStore('runtime', {
           break
         case 'session_suspended':
         case 'session_blocked':
+        case 'session_busy':
           this.sessionState = event.session_state
           chat.addSystemMessage(event.detail || event.type)
+          break
+        case 'turn_cancelling':
+          this.sessionState = event.session_state
+          chat.addSystemMessage('正在取消当前回合...')
+          break
+        case 'turn_cancelled':
+          this.sessionState = event.session_state
+          this.activeTurnId = ''
+          this.activePermission = null
+          this.activeClarification = null
+          chat.addSystemMessage(event.detail || '当前回合已取消。')
+          chat.finishActivity('error')
           break
         case 'session_resumed':
           if (event.session_id) {
@@ -1166,6 +1276,7 @@ export const useRuntimeStore = defineStore('runtime', {
           } else {
             chat.addSystemMessage(event.detail || '会话已恢复。')
           }
+          this.syncGlobalPermissionMode()
           this.requestSessions()
           this.requestConversationTitle()
           break
@@ -1188,6 +1299,13 @@ export const useRuntimeStore = defineStore('runtime', {
           if (event.type === 'workspace_error') {
             this.pendingWorkspaceResume = null
             this.pendingConversationSelectedRoot = null
+            if (event.requested_permission_mode) {
+              const activeMode = normalizePermissionMode(event.workspace?.policy?.permission_mode)
+              if (activeMode) {
+                this.globalPermissionMode = activeMode
+                saveGlobalPermissionMode(activeMode)
+              }
+            }
           }
           if (event.request_id?.startsWith('sessions-')) {
             this.sessionsLoading = false

@@ -10,6 +10,7 @@ from typing import Any, Dict, List
 from context_manager import ContextManager
 from server.protocol.events import EVENT_SCHEMA_VERSION
 from session import SessionRecord, SessionStore
+from session.models import TranscriptEvent
 from tools.core.catalog import build_default_registry
 from tools.core.registry import ToolRegistry
 from tools.core.runner import ToolRunner, create_tool_context
@@ -23,6 +24,9 @@ class SessionRuntimeState:
     """当前连接内的会话控制状态。"""
 
     session_id: str
+    active_turn_id: str | None = None
+    turn_started_at: float | None = None
+    cancellation_requested: bool = False
     suspended: bool = False
     suspended_category: str | None = None
     suspended_detail: str | None = None
@@ -33,19 +37,43 @@ class SessionRuntimeState:
 
         return {
             "status": "suspended" if self.suspended else "active",
+            "turn_in_progress": self.active_turn_id is not None,
+            "active_turn_id": self.active_turn_id,
+            "turn_started_at": self.turn_started_at,
+            "cancellation_requested": self.cancellation_requested,
             "suspended": self.suspended,
             "suspended_category": self.suspended_category,
             "suspended_detail": self.suspended_detail,
             "suspended_at": self.suspended_at,
         }
 
-    def suspend(self, category: str | None, detail: str) -> None:
+    def start_turn(self, turn_id: str, *, started_at: float | None = None) -> None:
+        """标记当前 session 正在执行一轮 user_input。"""
+
+        self.active_turn_id = turn_id
+        self.turn_started_at = started_at or time.time()
+        self.cancellation_requested = False
+
+    def finish_turn(self) -> None:
+        """清理当前 turn 的运行中状态。"""
+
+        self.active_turn_id = None
+        self.turn_started_at = None
+        self.cancellation_requested = False
+
+    def request_cancellation(self) -> None:
+        """记录用户已请求取消当前 turn。"""
+
+        self.cancellation_requested = True
+
+    def suspend(self, category: str | None, detail: str, *, suspended_at: float | None = None) -> None:
         """将当前会话置为挂起，阻止后续 user_input 继续执行。"""
 
         self.suspended = True
         self.suspended_category = category
         self.suspended_detail = detail
-        self.suspended_at = time.time()
+        self.suspended_at = suspended_at or time.time()
+        self.finish_turn()
 
     def resume(self) -> None:
         """解除挂起状态。"""
@@ -54,6 +82,45 @@ class SessionRuntimeState:
         self.suspended_category = None
         self.suspended_detail = None
         self.suspended_at = None
+
+
+def recover_session_runtime_state(
+    session_id: str,
+    events: list[TranscriptEvent],
+) -> SessionRuntimeState:
+    """从 transcript 恢复可跨进程保留的会话控制状态。"""
+
+    state = SessionRuntimeState(session_id=session_id)
+    for event in events:
+        if event.type == "turn_started":
+            turn_id = event.payload.get("turn_id")
+            if isinstance(turn_id, str) and turn_id.strip():
+                state.start_turn(turn_id, started_at=event.timestamp)
+            continue
+
+        if event.type in {"final_answer", "turn_cancelled", "runtime_error"}:
+            state.finish_turn()
+            continue
+
+        if event.type == "session_suspended":
+            state.suspend(
+                _optional_text(event.payload.get("category")),
+                _optional_text(event.payload.get("detail")) or "会话已挂起",
+                suspended_at=event.timestamp,
+            )
+            continue
+
+        if event.type == "session_resumed":
+            if _payload_says_suspended(event.payload):
+                state.suspend(
+                    _payload_session_text(event.payload, "suspended_category"),
+                    _payload_session_text(event.payload, "suspended_detail") or "会话已挂起",
+                    suspended_at=_payload_session_number(event.payload, "suspended_at"),
+                )
+            else:
+                state.resume()
+            state.finish_turn()
+    return state
 
 
 def create_websocket_session(
@@ -113,3 +180,40 @@ def persist_websocket_session(
                 "workspace": workspace.as_dict(),
             },
         )
+
+
+def _optional_text(value: Any) -> str | None:
+    """把 transcript payload 中的可选文本字段收束成干净字符串。"""
+
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _payload_says_suspended(payload: dict[str, Any]) -> bool:
+    """读取 transcript 中记录的 session_state.suspended。"""
+
+    session_state = payload.get("session_state")
+    return isinstance(session_state, dict) and session_state.get("suspended") is True
+
+
+def _payload_session_text(payload: dict[str, Any], key: str) -> str | None:
+    """从 payload.session_state 中读取可选文本字段。"""
+
+    session_state = payload.get("session_state")
+    if not isinstance(session_state, dict):
+        return None
+    return _optional_text(session_state.get(key))
+
+
+def _payload_session_number(payload: dict[str, Any], key: str) -> float | None:
+    """从 payload.session_state 中读取可选数字字段。"""
+
+    session_state = payload.get("session_state")
+    if not isinstance(session_state, dict):
+        return None
+    value = session_state.get(key)
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None

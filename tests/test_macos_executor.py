@@ -185,6 +185,32 @@ class MacOSSandboxExecutorTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 127)
         self.assertIn("仅支持 Darwin/macOS", result.stderr)
 
+    def test_run_without_sandbox_bypasses_sandbox_exec(self) -> None:
+        selected_root = Path.cwd()
+        filesystem_policy = FileSystemPolicy.danger_full_access(selected_root)
+        executor = SecureMacOSSandboxExecutor(selected_root)
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="ok\n",
+            stderr="",
+        )
+
+        with (
+            patch("sandbox.macos_executor.shutil.which") as which_mock,
+            patch("sandbox.macos_executor.subprocess.run", return_value=completed) as run_mock,
+        ):
+            result = executor.run(
+                "echo ok",
+                filesystem_policy=filesystem_policy,
+                network_policy=NetworkPolicy.ENABLED,
+                sandbox_enabled=False,
+            )
+
+        self.assertTrue(result.ok)
+        self.assertFalse(which_mock.called)
+        self.assertEqual(run_mock.call_args.args[0][:2], ["/bin/sh", "-lc"])
+
     def test_run_explains_nested_sandbox_failure(self) -> None:
         executor = SecureMacOSSandboxExecutor(Path.cwd())
         filesystem_policy = FileSystemPolicy.workspace_write(Path.cwd())
