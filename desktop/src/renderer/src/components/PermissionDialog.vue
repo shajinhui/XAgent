@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import type { PermissionRequestEvent } from '@renderer/types/runtimeEvents'
 
 const props = defineProps<{
@@ -10,6 +10,24 @@ const emit = defineEmits<{
   approve: [scope?: 'once' | 'session']
   deny: [feedback?: string]
 }>()
+
+function handleKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    emit('approve', 'once')
+  } else if (event.key === 'Escape') {
+    event.preventDefault()
+    emit('deny')
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', handleKeydown)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown)
+})
 
 const commandPreview = computed(() => {
   const command = metadataText('command') || commandFromArguments()
@@ -53,10 +71,10 @@ function commandFromArguments(): string {
 
     <div class="permission-options compact" aria-label="权限选择">
       <button class="permission-option" type="button" @click="emit('approve', 'once')">
-        <strong>允许</strong>
+        <strong>允许 (Enter)</strong>
       </button>
       <button class="permission-option" type="button" @click="emit('deny')">
-        <strong>拒绝</strong>
+        <strong>拒绝 (Esc)</strong>
       </button>
     </div>
   </section>

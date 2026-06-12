@@ -269,6 +269,7 @@ export type FinalAnswerEvent = RuntimeEventBase & {
   type: 'final_answer'
   content: string
   session_state: RuntimeSessionState
+  changed_files?: Array<{ path: string; can_undo: boolean }>
 }
 
 export type RuntimeErrorEvent = RuntimeEventBase & {

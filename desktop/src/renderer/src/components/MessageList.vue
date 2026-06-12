@@ -3,6 +3,7 @@ import { nextTick, ref, watch, type Component } from 'vue'
 import {
   BrainCircuit,
   ChevronRight,
+  Copy,
   FileText,
   Globe,
   MessageCircleQuestion,
@@ -104,6 +105,17 @@ async function handleTranscriptClick(event: MouseEvent): Promise<void> {
   }
 }
 
+async function copyMessageContent(messageId: string): Promise<void> {
+  const message = props.messages.find((m) => m.id === messageId)
+  if (!message) return
+
+  try {
+    await copyText(message.content)
+  } catch {
+    // 静默失败
+  }
+}
+
 watch(
   () => [props.messages.length, props.messages[props.messages.length - 1]?.content],
   scrollToBottom,
@@ -167,6 +179,22 @@ watch(
         ></div>
         <!-- eslint-enable vue/no-v-html -->
         <div v-else class="bubble">{{ message.content }}</div>
+
+        <!-- 消息操作栏 -->
+        <div
+          v-if="message.role === 'user' || message.role === 'assistant'"
+          class="message-actions"
+          :class="{ 'always-visible': message.role === 'assistant' }"
+        >
+          <span class="message-time">{{ new Date(message.timestamp || Date.now()).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }}</span>
+          <button
+            type="button"
+            class="action-button"
+            @click="copyMessageContent(message.id)"
+          >
+            <Copy :size="14" />
+          </button>
+        </div>
 
         <!-- Changed Files with Undo -->
         <div
@@ -248,6 +276,61 @@ watch(
 }
 
 .undo-button:active {
+  transform: scale(0.96);
+}
+
+.message-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  justify-content: flex-end;
+  margin-top: 2px;
+  padding-right: 4px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.message-user:hover .message-actions {
+  opacity: 1;
+}
+
+.message-actions.always-visible {
+  opacity: 0.6;
+}
+
+.message-actions.always-visible:hover {
+  opacity: 1;
+}
+
+.message-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.action-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0.6;
+  transition: all 0.15s ease;
+}
+
+.action-button:hover {
+  background: var(--control-hover-bg);
+  color: var(--text-control-strong);
+  opacity: 1;
+}
+
+.action-button:active {
   transform: scale(0.96);
 }
 </style>
