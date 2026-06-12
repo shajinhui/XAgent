@@ -51,6 +51,10 @@ This file is the shared context for future agent conversations in this repo.
 ## Important Files
 
 - `agent_loop.py`: CLI agent loop
+- `prompts/`: 系统提示词模块
+  - `prompts/base.py`: 模板加载器（编译时加载 Markdown 模板）
+  - `prompts/builder.py`: 提示词组装器
+  - `prompts/templates/`: Markdown 提示词模板（核心提示词、个性化、工具指引）
 - `server/app.py`: FastAPI WebSocket transport and request dispatch
 - `server/protocol/events.py`: event envelope and client packet parsing
 - `server/protocol/serialization.py`: object-to-dict conversion for SDK response objects

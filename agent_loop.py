@@ -7,6 +7,7 @@ from typing import Any, Dict, List, TypedDict
 from dotenv import load_dotenv
 from langgraph.graph import END, START, StateGraph
 
+from prompts import PromptBuilder, SystemPromptConfig
 from server.runtime.model_config import configure_litellm_environment
 from tools.core.catalog import build_default_registry
 from tools.core.registry import ToolRegistry
@@ -218,12 +219,10 @@ def main() -> None:
     runner = ToolRunner(registry, create_tool_context(project_root))
     app = build_graph(registry, runner)
 
-    # 系统提示，模型将以此作为对话背景
-    system_prompt = (
-        "你是一个代码助手。"
-        "可以按需调用工具 read_file/write_file/edit_file/grep/run_command。"
-        "如果不需要工具，直接给出最终答案。"
-    )
+    # 使用提示词模块构建系统提示
+    config = SystemPromptConfig(personality="default", include_tools=True)
+    builder = PromptBuilder()
+    system_prompt = builder.build(config)
 
     # 初始化消息队列，首条为 system
     messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
