@@ -11,10 +11,12 @@ import {
   ShieldAlert,
   Terminal,
   TriangleAlert,
+  Undo2,
   Wrench
 } from '@lucide/vue'
 import { renderMarkdown } from '@renderer/services/markdown'
 import { useChatStore } from '@renderer/stores/chat'
+import { useRuntimeStore } from '@renderer/stores/runtime'
 import type { ActivityStepKind, ChatMessage } from '@renderer/stores/chat'
 
 const props = defineProps<{
@@ -23,6 +25,7 @@ const props = defineProps<{
 
 const transcript = ref<HTMLElement | null>(null)
 const chat = useChatStore()
+const runtime = useRuntimeStore()
 
 const activityIcons: Record<ActivityStepKind, Component> = {
   thinking: BrainCircuit,
@@ -164,7 +167,87 @@ watch(
         ></div>
         <!-- eslint-enable vue/no-v-html -->
         <div v-else class="bubble">{{ message.content }}</div>
+
+        <!-- Changed Files with Undo -->
+        <div
+          v-if="message.role === 'assistant' && message.changedFiles?.length"
+          class="changed-files"
+        >
+          <div
+            v-for="file in message.changedFiles"
+            :key="file.path"
+            class="changed-file-item"
+          >
+            <span class="file-path">{{ file.path }}</span>
+            <button
+              v-if="file.can_undo"
+              type="button"
+              class="undo-button"
+              @click="runtime.undoFile(file.path)"
+            >
+              <Undo2 :size="14" />
+              撤销
+            </button>
+          </div>
+        </div>
       </template>
     </article>
   </div>
 </template>
+
+<style scoped>
+.changed-files {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.changed-file-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  gap: 12px;
+}
+
+.changed-file-item + .changed-file-item {
+  border-top: 1px solid var(--border-muted);
+}
+
+.file-path {
+  color: var(--text-muted-strong);
+  font-family: monospace;
+  font-size: 12px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.undo-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: var(--control-bg);
+  border: 1px solid var(--border-control);
+  border-radius: 6px;
+  color: var(--text-control);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.undo-button:hover {
+  background: var(--control-hover-bg);
+  border-color: var(--border-hover);
+  color: var(--text-control-strong);
+}
+
+.undo-button:active {
+  transform: scale(0.96);
+}
+</style>

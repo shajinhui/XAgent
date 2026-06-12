@@ -1002,6 +1002,15 @@ export const useRuntimeStore = defineStore('runtime', {
       })
     },
 
+    undoFile(filePath: string): void {
+      if (!runtimeSocket?.isOpen) return
+
+      runtimeSocket.send({
+        type: 'undo_file',
+        file_path: filePath
+      })
+    },
+
     sendClarificationResponse(payload: ClarificationResponsePayload): void {
       if (!this.activeClarification || !runtimeSocket?.isOpen) return
 
@@ -1285,7 +1294,7 @@ export const useRuntimeStore = defineStore('runtime', {
           this.activeTurnId = ''
           this.activeClarification = null
           chat.finishActivity('success')
-          chat.finishAssistantStream(event.content)
+          chat.finishAssistantStream(event.content, event.changed_files)
           this.requestSessions()
           this.requestConversationTitle()
           break

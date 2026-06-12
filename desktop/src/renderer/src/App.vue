@@ -110,6 +110,9 @@ const conversationSessions = computed<ConversationSessionItem[]>(() => {
       return true
     })
 })
+const conversationSessionIds = computed(
+  () => new Set(conversationSessions.value.map((session) => session.session_id))
+)
 
 const composerPlaceholder = computed(() => {
   if (runtime.isSuspended) return '会话已挂起，请先恢复...'
@@ -148,6 +151,12 @@ function sessionsForProject(root: string): RuntimeSessionSummary[] {
     return cachedSessions.length ? cachedSessions : runtime.sessionHistory
   }
   return runtime.sessionsBySelectedRoot[root] || []
+}
+
+function projectSessionsForDisplay(root: string): RuntimeSessionSummary[] {
+  return sessionsForProject(root).filter(
+    (session) => !conversationSessionIds.value.has(session.session_id)
+  )
 }
 
 async function openProject(project: RuntimeWorkspaceProject): Promise<void> {
@@ -472,7 +481,7 @@ onBeforeUnmount(() => {
 
               <div v-if="isProjectExpanded(project.selected_root)" class="sidebar-session-group">
                 <button
-                  v-for="session in sessionsForProject(project.selected_root)"
+                  v-for="session in projectSessionsForDisplay(project.selected_root)"
                   :key="session.session_id"
                   type="button"
                   class="sidebar-item"
@@ -494,7 +503,7 @@ onBeforeUnmount(() => {
                   正在加载
                 </p>
                 <p
-                  v-else-if="!sessionsForProject(project.selected_root).length"
+                  v-else-if="!projectSessionsForDisplay(project.selected_root).length"
                   class="sidebar-empty"
                 >
                   暂无历史会话

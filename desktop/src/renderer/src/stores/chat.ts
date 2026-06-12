@@ -36,6 +36,7 @@ export type ChatMessage = {
   step?: ActivityStep
   activityGroupId?: number
   isFinal?: boolean
+  changedFiles?: Array<{ path: string; can_undo: boolean }>
 }
 
 let nextMessageId = Date.now()
@@ -400,7 +401,7 @@ export const useChatStore = defineStore('chat', {
       }
     },
 
-    finishAssistantStream(content: string): void {
+    finishAssistantStream(content: string, changedFiles?: Array<{ path: string; can_undo: boolean }>): void {
       const text = content.trim()
       if (!this.streamingMessageId) {
         if (text) {
@@ -408,7 +409,8 @@ export const useChatStore = defineStore('chat', {
             id: createMessageId(),
             role: 'assistant',
             content: text,
-            isFinal: true
+            isFinal: true,
+            changedFiles
           })
         }
         return
@@ -419,6 +421,7 @@ export const useChatStore = defineStore('chat', {
         message.content = text || message.content || '完成。'
         message.meta = undefined
         message.isFinal = true
+        message.changedFiles = changedFiles
       }
       this.streamingMessageId = null
     }

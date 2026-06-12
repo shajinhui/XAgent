@@ -60,7 +60,7 @@
   --text-quote: #b7c1cc;
   --text-code: #d1d5db;
   --markdown-code-text: #e5e7eb;
-  --markdown-code-bg: rgba(229, 231, 235, 0.1);
+  --markdown-code-bg: rgba(229, 231, 235, 0.14);
   --markdown-code-border: rgba(229, 231, 235, 0.12);
   --markdown-code-block-bg: rgba(229, 231, 235, 0.055);
   --syntax-attribute: #8bd3dd;
@@ -163,7 +163,7 @@
   --text-quote: #475467;
   --text-code: #1f2937;
   --markdown-code-text: #24292f;
-  --markdown-code-bg: #f1f2f4;
+  --markdown-code-bg: #e9edf2;
   --markdown-code-border: #e1e4e8;
   --markdown-code-block-bg: #eeeeee;
   --syntax-attribute: #0f766e;
