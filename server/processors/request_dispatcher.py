@@ -833,13 +833,33 @@ class WebSocketRequestDispatcher:
             )
             return
 
-        # 注意：这里需要从当前 turn_context 获取 diff_tracker
-        # 但 WebSocket 层没有 turn_context，需要考虑如何持久化
-        # 暂时返回错误，提示功能未完全实现
-        await self._send_error(
-            packet,
-            request_id=request_id,
-            message="undo_file not yet implemented: turn context not accessible",
+        # 从上次保存的 diff_tracker 撤销
+        if not self.context.last_diff_tracker:
+            await self._send_error(
+                packet,
+                request_id=request_id,
+                message="no changes to undo",
+            )
+            return
+
+        success = self.context.last_diff_tracker.undo_file(file_path)
+
+        if not success:
+            await self._send_error(
+                packet,
+                request_id=request_id,
+                message=f"file not found in changes: {file_path}",
+            )
+            return
+
+        await self.ws.send_json(
+            build_event(
+                "file_undone",
+                self.context.session_id,
+                _turn_id(packet),
+                request_id=request_id,
+                file_path=file_path,
+            )
         )
 
     async def _send_workspace_policy_changed(

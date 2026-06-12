@@ -343,6 +343,12 @@ if app is not None:
 
                 context.session_state.finish_turn()
 
+                # 保存 diff_tracker 以便后续撤销
+                context.last_diff_tracker = turn_context.diff_tracker
+
+                # 获取本 turn 变更的文件
+                changed_files = turn_context.diff_tracker.get_changed_files()
+
                 final_text = ""
                 for msg in reversed(context.messages):
                     if msg.get("role") == "assistant" and msg.get("content"):
@@ -365,6 +371,7 @@ if app is not None:
                         "turn_id": turn_id,
                         "content": final_text,
                         "session_state": context.session_state.as_dict(),
+                        "changed_files": list(changed_files.keys()),
                     },
                 )
                 await ws.send_json(
@@ -374,6 +381,10 @@ if app is not None:
                         turn_id,
                         content=final_text,
                         session_state=context.session_state.as_dict(),
+                        changed_files=[
+                            {"path": path, "can_undo": True}
+                            for path in changed_files.keys()
+                        ],
                     )
                 )
         except WebSocketDisconnect:

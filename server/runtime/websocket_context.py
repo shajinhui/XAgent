@@ -54,6 +54,7 @@ class WebSocketRuntimeContext:
     history: ContextManager
     permission_mode: PermissionMode = PermissionMode.REQUEST_APPROVAL
     session_persisted: bool = False
+    last_diff_tracker: Any = None  # 保存最后一次 turn 的 diff_tracker
 
     @property
     def messages(self) -> List[Dict[str, Any]]:
@@ -278,12 +279,9 @@ class WebSocketRuntimeContext:
         )
 
     def _auto_summarize_session(self, session_id: str) -> None:
-        """自动生成会话摘要并保存到 memory，同时学习用户偏好。"""
+        """自动生成会话摘要并保存到 workspace memory。"""
         try:
-            from pathlib import Path
-
             from memory.indexer import update_memory_index
-            from memory.learner import extract_user_preferences
             from memory.store import MemoryStore
             from memory.summarizer import extract_task_state, summarize_session
 
@@ -298,21 +296,7 @@ class WebSocketRuntimeContext:
             task_state = extract_task_state(events)
             memory_store.save_session_memory(session_id, summary, {"task_state": task_state})
 
-            # 2. 学习用户偏好（保存到全局 User Memory）
-            preferences = extract_user_preferences(events)
-            if preferences:
-                user_memory_dir = Path.home() / ".codex-mini" / "memory"
-                user_store = MemoryStore(user_memory_dir)
-
-                existing = user_store.load_user_memory()
-                if existing:
-                    new_content = existing.content + "\n" + "\n".join(f"- {p}" for p in preferences)
-                else:
-                    new_content = "# 用户偏好\n\n" + "\n".join(f"- {p}" for p in preferences)
-
-                user_store.save_user_memory(new_content)
-
-            # 3. 更新 MEMORY.md 索引
+            # 用户偏好只通过显式 remember_preference 写入，避免误记临时或敏感信息。
             update_memory_index(memory_dir)
         except Exception:
             pass  # 静默失败，不影响正常流程

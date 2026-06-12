@@ -160,9 +160,6 @@ def create_websocket_session(
     )
     history = ContextManager.with_system_prompt(rendered_system_prompt)
 
-    # 注入 Memory
-    history.inject_memory(project_root=workspace.project_root)
-
     return session_id, session_state, registry, runner, history
 
 
