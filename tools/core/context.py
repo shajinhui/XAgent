@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from session.turn_diff import TurnDiffTracker
 
 
 @dataclass(frozen=True)
@@ -26,18 +29,6 @@ class ToolCancellationState:
 
 
 @dataclass
-class TurnDiffTracker:
-    """Tracks files touched by tools during a turn."""
-
-    touched_paths: list[str] = field(default_factory=list)
-
-    def record_path(self, path: Path | str) -> None:
-        value = path.as_posix() if isinstance(path, Path) else str(path)
-        if value not in self.touched_paths:
-            self.touched_paths.append(value)
-
-
-@dataclass
 class ToolInvocation:
     """Internal representation of one model-requested tool call.
 
@@ -56,7 +47,7 @@ class ToolInvocation:
     source: str = "model"
     approval: ToolApprovalState = field(default_factory=ToolApprovalState)
     cancellation: ToolCancellationState = field(default_factory=ToolCancellationState)
-    diff_tracker: TurnDiffTracker = field(default_factory=TurnDiffTracker)
+    diff_tracker: "TurnDiffTracker | None" = None
 
     @classmethod
     def from_model_call(
@@ -80,7 +71,7 @@ class ToolInvocation:
             turn_id=getattr(turn_context, "turn_id", None),
             selected_root=getattr(turn_context.environment, "selected_root", None),
             current_dir=getattr(turn_context.environment, "current_dir", None),
-            diff_tracker=getattr(turn_context, "diff_tracker", TurnDiffTracker()),
+            diff_tracker=getattr(turn_context, "diff_tracker", None),
         )
 
     def with_approval(

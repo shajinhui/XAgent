@@ -168,13 +168,7 @@ class ToolRunner:
             return
 
         root = invocation.current_dir or self.ctx.current_dir
-        for key in ("path", "cwd"):
-            raw_path = payload.get(key)
-            if isinstance(raw_path, str) and raw_path.strip():
-                path = Path(raw_path)
-                if not path.is_absolute():
-                    path = root / path
-                invocation.diff_tracker.record_path(path.resolve())
+        # 路径跟踪已移至 write_file/edit_file 工具内部处理
 
 
 def _filesystem_policy_for_profile(
