@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from session.models import TranscriptEvent
 
@@ -39,19 +39,20 @@ def _summarize_with_rules(events: List[TranscriptEvent]) -> str:
                 assistant_messages.append(content)
 
         elif event.type == "tool_call_started":
-            tool_name = event.payload.get("tool_name", "")
+            tool_name = _tool_name(event.payload)
             if tool_name:
                 tool_calls.append(tool_name)
+                args = _tool_arguments(event.payload)
 
                 if tool_name in ("write_file", "edit_file"):
-                    args = event.payload.get("args", {})
-                    if "file_path" in args:
-                        files_modified.add(args["file_path"])
+                    file_path = _first_string_arg(args, "file_path", "path")
+                    if file_path:
+                        files_modified.add(file_path)
 
-                elif tool_name == "execute_command":
-                    args = event.payload.get("args", {})
-                    if "command" in args:
-                        commands_run.append(args["command"])
+                elif tool_name in ("run_command", "execute_command"):
+                    command = _first_string_arg(args, "command", "cmd")
+                    if command:
+                        commands_run.append(command)
 
     summary_parts = []
 
@@ -131,17 +132,46 @@ def extract_task_state(events: List[TranscriptEvent]) -> Dict:
                 state["goal"] = content[:300]
 
         elif event.type == "tool_call_started":
-            tool_name = event.payload.get("tool_name", "")
-            args = event.payload.get("args", {})
+            tool_name = _tool_name(event.payload)
+            args = _tool_arguments(event.payload)
 
-            if tool_name in ("write_file", "edit_file") and "file_path" in args:
-                file_path = args["file_path"]
+            if tool_name in ("write_file", "edit_file"):
+                file_path = _first_string_arg(args, "file_path", "path")
+                if not file_path:
+                    continue
                 if file_path not in state["modified_files"]:
                     state["modified_files"].append(file_path)
 
-            elif tool_name == "execute_command" and "command" in args:
-                cmd = args["command"]
+            elif tool_name in ("run_command", "execute_command"):
+                cmd = _first_string_arg(args, "command", "cmd")
+                if not cmd:
+                    continue
                 if cmd not in state["executed_commands"]:
                     state["executed_commands"].append(cmd)
 
     return state
+
+
+def _tool_name(payload: Dict[str, Any]) -> str:
+    """兼容当前 transcript 字段和早期测试字段。"""
+
+    return str(payload.get("tool") or payload.get("tool_name") or "").strip()
+
+
+def _tool_arguments(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """读取工具参数，兼容 `arguments` 和早期 `args`。"""
+
+    raw = payload.get("arguments")
+    if raw is None:
+        raw = payload.get("args")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _first_string_arg(args: Dict[str, Any], *keys: str) -> str | None:
+    """从工具参数中取第一个非空字符串值。"""
+
+    for key in keys:
+        value = args.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
