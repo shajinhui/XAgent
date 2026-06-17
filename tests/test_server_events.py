@@ -14,6 +14,11 @@ from server.processors.title_processor import (
     normalize_title_messages,
     sanitize_conversation_title,
 )
+from server.processors.task_list_processor import (
+    fallback_task_list,
+    generate_task_list,
+    normalize_task_list,
+)
 from server.protocol.events import EVENT_SCHEMA_VERSION, build_event, parse_client_packet
 from server.runtime.model_config import (
     build_api_kwargs,
@@ -604,6 +609,74 @@ class ServerEventTests(unittest.TestCase):
             },
         ):
             self.assertEqual(build_low_cost_model_name(), "deepseek-chat")
+
+    def test_task_list_normalizes_model_output(self) -> None:
+        tasks = normalize_task_list(
+            {
+                "tasks": [
+                    {"step": " 分析项目结构 ", "status": "running"},
+                    {"step": "修改前端卡片", "status": "pending"},
+                    {"step": "验证构建", "status": "pending"},
+                ]
+            }
+        )
+
+        self.assertEqual(
+            tasks,
+            [
+                {"step": "分析项目结构", "status": "in_progress"},
+                {"step": "修改前端卡片", "status": "pending"},
+                {"step": "验证构建", "status": "pending"},
+            ],
+        )
+
+    def test_generate_task_list_uses_low_cost_model(self) -> None:
+        def fake_completion(**kwargs):
+            self.assertEqual(kwargs["model"], "deepseek/deepseek-chat")
+            self.assertIn("把用户任务拆成 UI 可展示的简短任务列表", kwargs["messages"][0]["content"])
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                "```json\n"
+                                '{"tasks":[{"step":"定位问题","status":"in_progress"},'
+                                '{"step":"修改实现","status":"pending"},'
+                                '{"step":"验证结果","status":"pending"}]}\n'
+                                "```"
+                            )
+                        }
+                    }
+                ]
+            }
+
+        with patch.dict(
+            os.environ,
+            {
+                "MODEL_PROVIDER": "openai",
+                "MODEL_NAME": "gpt-4o",
+                "LOW_COST_MODEL_PROVIDER": "deepseek",
+                "LOW_COST_MODEL_NAME": "deepseek-chat",
+            },
+        ):
+            tasks, source = generate_task_list("修复右上角任务卡片", completion_fn=fake_completion)
+
+        self.assertEqual(source, "low-cost-task-list")
+        self.assertEqual(
+            tasks,
+            [
+                {"step": "定位问题", "status": "in_progress"},
+                {"step": "修改实现", "status": "pending"},
+                {"step": "验证结果", "status": "pending"},
+            ],
+        )
+
+    def test_fallback_task_list_is_stable(self) -> None:
+        tasks = fallback_task_list("修复右上角卡片展示")
+
+        self.assertEqual(tasks[0]["status"], "in_progress")
+        self.assertEqual(len(tasks), 3)
+        self.assertTrue(all(task["step"] for task in tasks))
 
     def test_api_kwargs_use_single_generic_api_key(self) -> None:
         with patch.dict(os.environ, {"API_KEY": "test-key", "API_BASE": "https://example.test"}):

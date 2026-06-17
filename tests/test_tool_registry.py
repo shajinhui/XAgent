@@ -39,6 +39,9 @@ class ToolRegistryTests(unittest.TestCase):
                 "ask_user",
                 "write_file",
                 "edit_file",
+                "run_tests",
+                "update_plan",
+                "create_task_list",
                 "grep",
                 "run_command",
                 "web_fetch",
@@ -92,6 +95,12 @@ class ToolRegistryTests(unittest.TestCase):
             self.assertFalse(metadata["ask_user"]["supports_parallel"])
             self.assertTrue(metadata["write_file"]["is_mutating"])
             self.assertTrue(metadata["run_command"]["requires_approval"])
+            self.assertTrue(metadata["run_tests"]["is_mutating"])
+            self.assertTrue(metadata["run_tests"]["requires_approval"])
+            self.assertTrue(metadata["update_plan"]["is_mutating"])
+            self.assertTrue(metadata["update_plan"]["requires_approval"])
+            self.assertTrue(metadata["create_task_list"]["is_mutating"])
+            self.assertTrue(metadata["create_task_list"]["requires_approval"])
 
     def test_unknown_tool_returns_structured_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -380,6 +389,23 @@ class ToolRegistryTests(unittest.TestCase):
             self.assertEqual(result.metadata["permission_profile"], "workspace_write")
             self.assertEqual(result.metadata["current_dir"], root.resolve().as_posix())
             self.assertFalse((root / "created.txt").exists())
+
+    def test_runtime_state_tools_require_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _registry, runner = build_default_runner(root)
+
+            run_tests_result = runner.execute("run_tests", json.dumps({}))
+            update_plan_result = runner.execute(
+                "update_plan",
+                json.dumps({"plan": [{"step": "检查", "status": "pending"}]}),
+            )
+
+            self.assertFalse(run_tests_result.ok)
+            self.assertEqual(run_tests_result.metadata["permission_action"], "ask")
+            self.assertFalse(update_plan_result.ok)
+            self.assertEqual(update_plan_result.metadata["permission_action"], "ask")
+            self.assertFalse((root / ".codex-mini" / "tasks.json").exists())
 
     def test_mutating_file_tool_runs_after_approval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

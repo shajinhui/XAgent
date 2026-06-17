@@ -9,6 +9,8 @@ from tools.interaction import ask_user
 from tools.network import web_fetch
 from tools.search import grep
 from tools.shell import run_command
+from tools.testing import run_tests
+from tools.planning import task_list
 
 
 def builtin_tools() -> list[Tool]:
@@ -17,6 +19,9 @@ def builtin_tools() -> list[Tool]:
         FunctionTool(ask_user.META, ask_user.schema, ask_user.run),
         FunctionTool(write_file.META, write_file.schema, write_file.run),
         FunctionTool(edit_file.META, edit_file.schema, edit_file.run),
+        FunctionTool(run_tests.META, run_tests.schema, run_tests.run),
+        FunctionTool(task_list.META, task_list.schema, task_list.run),
+        FunctionTool(task_list.CREATE_META, task_list.create_schema, task_list.create_run),
         FunctionTool(grep.META, grep.schema, grep.run),
         FunctionTool(run_command.META, run_command.schema, run_command.run),
         FunctionTool(web_fetch.META, web_fetch.schema, web_fetch.run),

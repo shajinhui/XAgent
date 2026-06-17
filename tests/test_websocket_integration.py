@@ -40,10 +40,12 @@ class WebSocketIntegrationTests(unittest.TestCase):
                     ws.send_json({"type": "user_input", "content": "ping"})
 
                     turn_started = ws.receive_json()
+                    task_list = ws.receive_json()
                     final_answer = ws.receive_json()
 
             self.assertEqual(turn_started["type"], "turn_started")
             self.assertTrue(turn_started["session_state"]["turn_in_progress"])
+            self.assertEqual(task_list["type"], "task_list")
             self.assertEqual(final_answer["type"], "final_answer")
             self.assertEqual(final_answer["content"], "pong")
             self.assertFalse(final_answer["session_state"]["turn_in_progress"])

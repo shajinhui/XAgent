@@ -140,6 +140,7 @@ class ServerWebSocketTests(unittest.TestCase):
                                 }
                             )
                             turn_started = ws.receive_json()
+                            task_list = ws.receive_json()
                             final_answer = ws.receive_json()
 
             context = contexts[-1]
@@ -147,6 +148,7 @@ class ServerWebSocketTests(unittest.TestCase):
             events = context.session_store.load_events(record.session_id)
 
             self.assertEqual(turn_started["type"], "turn_started")
+            self.assertEqual(task_list["type"], "task_list")
             self.assertEqual(final_answer["type"], "final_answer")
             self.assertEqual(final_answer["content"], "pong")
             self.assertEqual(
@@ -155,6 +157,7 @@ class ServerWebSocketTests(unittest.TestCase):
                     "session_started",
                     "user_message",
                     "turn_started",
+                    "task_list",
                     "assistant_message",
                     "final_answer",
                 ],

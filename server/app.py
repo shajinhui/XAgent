@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from langgraph.graph import END, START, StateGraph
 
 from server.processors.request_dispatcher import WebSocketRequestDispatcher
+from server.processors.task_list_processor import fallback_task_list, generate_task_list
 from server.protocol.events import EVENT_SCHEMA_VERSION, build_event, parse_client_packet
 from server.runtime.model_config import (
     ModelRequestConfig,
@@ -280,6 +281,32 @@ if app is not None:
                         turn_id,
                         session_state=context.session_state.as_dict(),
                         model_config=model_config.as_dict(),
+                    )
+                )
+
+                try:
+                    task_list, task_list_model = generate_task_list(user_text)
+                except Exception as exc:
+                    task_list = fallback_task_list(user_text)
+                    task_list_model = f"fallback:{type(exc).__name__}"
+
+                record_transcript_event(
+                    context.session_store,
+                    context.session_id,
+                    "task_list",
+                    {
+                        "turn_id": turn_id,
+                        "items": task_list,
+                        "model": task_list_model,
+                    },
+                )
+                await ws.send_json(
+                    build_event(
+                        "task_list",
+                        context.session_id,
+                        turn_id,
+                        items=task_list,
+                        model=task_list_model,
                     )
                 )
 
