@@ -39,6 +39,8 @@ class ToolRegistryTests(unittest.TestCase):
                 "ask_user",
                 "write_file",
                 "edit_file",
+                "list_files",
+                "file_search",
                 "run_tests",
                 "update_plan",
                 "create_task_list",

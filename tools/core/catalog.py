@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from tools.core.protocol import FunctionTool, Tool
 from tools.core.registry import ToolRegistry
-from tools.filesystem import edit_file, read_file, write_file
+from tools.filesystem import edit_file, read_file, write_file, list_files
 from tools.interaction import ask_user
 from tools.network import web_fetch
-from tools.search import grep
+from tools.search import grep, file_search
 from tools.shell import run_command
 from tools.testing import run_tests
 from tools.planning import task_list
@@ -19,6 +19,8 @@ def builtin_tools() -> list[Tool]:
         FunctionTool(ask_user.META, ask_user.schema, ask_user.run),
         FunctionTool(write_file.META, write_file.schema, write_file.run),
         FunctionTool(edit_file.META, edit_file.schema, edit_file.run),
+        FunctionTool(list_files.META, list_files.schema, list_files.run),
+        FunctionTool(file_search.META, file_search.schema, file_search.run),
         FunctionTool(run_tests.META, run_tests.schema, run_tests.run),
         FunctionTool(task_list.META, task_list.schema, task_list.run),
         FunctionTool(task_list.CREATE_META, task_list.create_schema, task_list.create_run),
