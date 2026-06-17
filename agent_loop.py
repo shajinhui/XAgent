@@ -109,17 +109,42 @@ def call_model(state: AgentState, registry: ToolRegistry) -> AgentState:
     from litellm import completion
 
     model_name = _build_model_name()
+    messages = state["messages"]
+
+    # 检查是否需要压缩
+    from context_manager.compaction import should_compact, compact_messages
+    if should_compact(messages, threshold_tokens=256000):
+        import asyncio
+        from context_manager.summarizer import generate_summary
+
+        print("⚙️  上下文接近 256k 限制，正在压缩前 80% 的对话...")
+
+        # 压缩消息
+        compacted_messages, summary_text = compact_messages(messages, keep_ratio=0.2)
+
+        # 生成摘要
+        summary = asyncio.run(generate_summary(summary_text))
+
+        # 替换占位符
+        for msg in compacted_messages:
+            if msg.get("content") == "[SUMMARY_PLACEHOLDER]":
+                msg["content"] = f"## 早期对话摘要\n\n{summary}"
+                break
+
+        messages = compacted_messages
+        print(f"✓ 已压缩，估算节省 {len(summary_text) // 4 - len(summary) // 4} tokens")
+
     # 调用 litellm completion；传入当前的对话消息和工具定义
     response = completion(
         **_build_completion_kwargs(model_name),
-        messages=state["messages"],
+        messages=messages,
         tools=registry.schemas(),
         tool_choice="auto",
     )
 
     # 提取模型返回的消息结构（忽略 None 字段）并追加到消息列表中
     message = response.choices[0].message.model_dump(exclude_none=True) # type: ignore
-    return {"messages": state["messages"] + [message]}
+    return {"messages": messages + [message]}
 
 
 def should_continue(state: AgentState) -> str:

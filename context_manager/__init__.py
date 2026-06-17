@@ -10,6 +10,8 @@ from context_manager.history import clear_historical_reasoning_content
 from context_manager.truncation import truncate_text
 from context_manager.updates import append_tool_result
 from context_manager.updates import append_user_turn
+from context_manager.compaction import should_compact, compact_messages
+from context_manager.summarizer import generate_summary
 
 __all__ = [
     "ContextManager",
@@ -17,4 +19,7 @@ __all__ = [
     "append_user_turn",
     "clear_historical_reasoning_content",
     "truncate_text",
+    "should_compact",
+    "compact_messages",
+    "generate_summary",
 ]
