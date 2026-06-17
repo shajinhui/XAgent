@@ -55,3 +55,4 @@ class ToolExecutionContext:
     approval_policy: ApprovalPolicy
     circuit_breaker: CircuitBreaker
     command_executor: SecureMacOSSandboxExecutor
+    diff_tracker: Any | None = None

@@ -283,7 +283,6 @@ if app is not None:
                         model_config=model_config.as_dict(),
                     )
                 )
-
                 try:
                     task_list, task_list_model = generate_task_list(user_text)
                 except Exception as exc:
@@ -376,6 +375,35 @@ if app is not None:
                 # 获取本 turn 变更的文件
                 changed_files = turn_context.diff_tracker.get_changed_files()
 
+                # 构建变更文件列表: 相对路径 + 增删行数
+                project_root = context.workspace.project_root if context.workspace else None
+                changed_files_payload = []
+                for abs_path, diff in changed_files.items():
+                    # 转换为项目相对路径
+                    rel_path = abs_path
+                    if project_root:
+                        try:
+                            rel_path = str(Path(abs_path).relative_to(project_root))
+                        except ValueError:
+                            pass
+                    # 计算增删行数
+                    before_lines = diff["before"].splitlines() if diff["before"] else []
+                    after_lines = diff["after"].splitlines() if diff["after"] else []
+                    additions = max(0, len(after_lines) - len(before_lines))
+                    deletions = max(0, len(before_lines) - len(after_lines))
+                    # 逐行比对: 统计实际变更行（不只是净增减）
+                    common = min(len(before_lines), len(after_lines))
+                    changed = sum(1 for i in range(common) if before_lines[i] != after_lines[i])
+                    additions += changed
+                    deletions += changed
+                    changed_files_payload.append({
+                        "path": rel_path,
+                        "abs_path": abs_path,
+                        "can_undo": True,
+                        "additions": additions,
+                        "deletions": deletions,
+                    })
+
                 final_text = ""
                 for msg in reversed(context.messages):
                     if msg.get("role") == "assistant" and msg.get("content"):
@@ -409,8 +437,13 @@ if app is not None:
                         content=final_text,
                         session_state=context.session_state.as_dict(),
                         changed_files=[
-                            {"path": path, "can_undo": True}
-                            for path in changed_files.keys()
+                            {
+                                "path": f["path"],
+                                "can_undo": f["can_undo"],
+                                "additions": f["additions"],
+                                "deletions": f["deletions"],
+                            }
+                            for f in changed_files_payload
                         ],
                     )
                 )

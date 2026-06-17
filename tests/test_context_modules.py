@@ -98,7 +98,8 @@ class ContextModuleTests(unittest.TestCase):
             self.assertEqual(invocation.session_id, "session-1")
             self.assertEqual(invocation.turn_id, "turn-1")
             self.assertEqual(invocation.selected_root, workspace.selected_root)
-            self.assertEqual(invocation.diff_tracker.touched_paths, [(workspace.selected_root / "created.txt").resolve().as_posix()])
+            changed_files = invocation.diff_tracker.get_changed_files()
+            self.assertIn((workspace.selected_root / "created.txt").resolve().as_posix(), changed_files)
 
 
 if __name__ == "__main__":

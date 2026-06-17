@@ -842,7 +842,15 @@ class WebSocketRequestDispatcher:
             )
             return
 
-        success = self.context.last_diff_tracker.undo_file(file_path)
+        # 客户端可能发送相对路径，需要解析为绝对路径以匹配 diff_tracker
+        from pathlib import Path as _Path
+
+        abs_path = file_path
+        if not _Path(file_path).is_absolute() and self.context.workspace:
+            abs_path = (self.context.workspace.project_root / file_path).resolve().as_posix()
+        elif _Path(file_path).is_absolute():
+            abs_path = _Path(file_path).resolve().as_posix()
+        success = self.context.last_diff_tracker.undo_file(abs_path)
 
         if not success:
             await self._send_error(

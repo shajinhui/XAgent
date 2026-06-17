@@ -79,9 +79,9 @@ def run(ctx: ToolExecutionContext, payload: dict) -> str | ToolResult:
             },
         )
 
-    # 保存 baseline（在修改前）
-    if hasattr(ctx, 'turn_context') and ctx.turn_context:
-        ctx.turn_context.diff_tracker.save_baseline(str(path))
+    # baseline 必须在写入前保存，turn 结束后才能准确展示本轮变更。
+    if ctx.diff_tracker:
+        ctx.diff_tracker.save_baseline(str(path))
 
     lines = updated_lines
     path.write_text("".join(lines), encoding="utf-8")

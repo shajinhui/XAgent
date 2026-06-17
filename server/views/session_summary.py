@@ -250,6 +250,7 @@ def _activity_event_message(activity_key: str, event: TranscriptEvent) -> Dict[s
         "status": status,
         "kind": kind,
         "requestId": request_id,
+        "toolName": tool_name,
     }
     if detail:
         step["detail"] = detail

@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from session import SessionStore
 from session.models import SessionRecord, TranscriptEvent
+from session.turn_diff import TurnDiffTracker
 from server.processors.request_dispatcher import WebSocketRequestDispatcher
 from server.processors.title_processor import (
     generate_conversation_title,
@@ -393,6 +394,7 @@ class ServerEventTests(unittest.TestCase):
                         "status": "success",
                         "kind": "read",
                         "requestId": "call-1",
+                        "toolName": "read_file",
                         "detail": "文件内容",
                     },
                     "timestamp": 3.0,
@@ -859,6 +861,34 @@ class ServerEventTests(unittest.TestCase):
 
 
 class WebSocketRequestDispatcherTests(unittest.IsolatedAsyncioTestCase):
+    async def test_undo_file_restores_changed_file_and_consumes_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "notes.txt"
+            target.write_text("before", encoding="utf-8")
+            tracker = TurnDiffTracker()
+            tracker.save_baseline(target.as_posix())
+            target.write_text("after", encoding="utf-8")
+
+            context = WebSocketRuntimeContext.create(root, "system")
+            context.last_diff_tracker = tracker
+            ws = FakeWebSocket()
+            dispatcher = WebSocketRequestDispatcher(ws, context)
+
+            handled = await dispatcher.handle_control_packet(
+                {
+                    "type": "undo_file",
+                    "file_path": "notes.txt",
+                    "request_id": "undo-1",
+                }
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(target.read_text(encoding="utf-8"), "before")
+            self.assertEqual(ws.sent[0]["type"], "file_undone")
+            self.assertEqual(ws.sent[0]["request_id"], "undo-1")
+            self.assertNotIn(target.resolve().as_posix(), tracker.baselines)
+
     async def test_invalid_packet_before_first_user_input_does_not_persist_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             context = WebSocketRuntimeContext.create(Path(tmp), "system")

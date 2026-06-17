@@ -75,10 +75,15 @@ class ToolRunner:
         invocation: ToolInvocation,
         approved: bool | None = None,
     ) -> ToolResult:
-        """Execute a routed invocation and keep invocation-scoped side effects together."""
+        """执行已路由的工具调用，并临时挂载 turn 级别的变更跟踪器。"""
 
         is_approved = invocation.approval.approved if approved is None else approved
-        result = self.execute(invocation.name, invocation.arguments, approved=is_approved)
+        previous_diff_tracker = self.ctx.diff_tracker
+        self.ctx.diff_tracker = invocation.diff_tracker
+        try:
+            result = self.execute(invocation.name, invocation.arguments, approved=is_approved)
+        finally:
+            self.ctx.diff_tracker = previous_diff_tracker
         if result.ok:
             self._record_invocation_diff(invocation)
         return result
@@ -152,23 +157,11 @@ class ToolRunner:
             )
 
     def _record_invocation_diff(self, invocation: ToolInvocation) -> None:
-        """Record simple touched-path evidence for mutating tools.
-
-        This is intentionally conservative for now: it records obvious `path`/`cwd`
-        arguments so the turn can later expose what the model changed.
-        """
+        """保留变更记录边界；具体 baseline 由 mutating 工具在写入前保存。"""
 
         tool = self.registry.get(invocation.name)
         if tool is None or not tool.meta.is_mutating:
             return
-
-        try:
-            payload = json.loads(invocation.arguments or "{}")
-        except json.JSONDecodeError:
-            return
-
-        root = invocation.current_dir or self.ctx.current_dir
-        # 路径跟踪已移至 write_file/edit_file 工具内部处理
 
 
 def _filesystem_policy_for_profile(
