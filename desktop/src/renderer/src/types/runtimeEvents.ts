@@ -105,6 +105,12 @@ export type RuntimeActivityStep = {
   kind: RuntimeActivityStepKind
   detail?: string
   requestId?: string
+  toolName?: string
+}
+
+export type RuntimeTaskListItem = {
+  step: string
+  status: 'pending' | 'in_progress' | 'completed' | 'error'
 }
 
 export type RuntimeDisplayMessage = {
@@ -162,6 +168,12 @@ export type TurnStartedEvent = RuntimeEventBase & {
     model: string
     reasoning_effort: RuntimeReasoningEffort
   }
+}
+
+export type TaskListEvent = RuntimeEventBase & {
+  type: 'task_list'
+  items: RuntimeTaskListItem[]
+  model: string
 }
 
 export type SessionCreatedEvent = RuntimeEventBase & {
@@ -269,7 +281,12 @@ export type FinalAnswerEvent = RuntimeEventBase & {
   type: 'final_answer'
   content: string
   session_state: RuntimeSessionState
-  changed_files?: Array<{ path: string; can_undo: boolean }>
+  changed_files?: Array<{ path: string; can_undo: boolean; additions?: number; deletions?: number }>
+}
+
+export type FileUndoneEvent = RuntimeEventBase & {
+  type: 'file_undone'
+  file_path: string
 }
 
 export type RuntimeErrorEvent = RuntimeEventBase & {
@@ -307,6 +324,7 @@ export type SessionDeletedEvent = RuntimeEventBase & {
 export type RuntimeEvent =
   | ReadyEvent
   | TurnStartedEvent
+  | TaskListEvent
   | SessionCreatedEvent
   | WorkspaceChangedEvent
   | WorkspacePolicyChangedEvent
@@ -319,6 +337,7 @@ export type RuntimeEvent =
   | ClarificationResponseAckEvent
   | SessionStateEvent
   | FinalAnswerEvent
+  | FileUndoneEvent
   | ConversationTitleEvent
   | SessionsListEvent
   | SessionDeletedEvent
@@ -347,6 +366,7 @@ export type RuntimeClientPacket =
   | {
       type: 'resume_session'
       session_id?: string
+      request_id?: string
       turn_id?: string
     }
   | {
@@ -359,6 +379,12 @@ export type RuntimeClientPacket =
       type: 'delete_session'
       session_id: string
       workspace_path?: string
+      request_id?: string
+      turn_id?: string
+    }
+  | {
+      type: 'undo_file'
+      file_path: string
       request_id?: string
       turn_id?: string
     }

@@ -1,5 +1,9 @@
 import { defineStore } from 'pinia'
-import type { ConversationTitleMessage, RuntimeDisplayMessage } from '@renderer/types/runtimeEvents'
+import type {
+  ConversationTitleMessage,
+  RuntimeDisplayMessage,
+  RuntimeTaskListItem
+} from '@renderer/types/runtimeEvents'
 
 export type ChatRole = 'user' | 'assistant' | 'system' | 'activity' | 'activity_event'
 
@@ -22,7 +26,10 @@ export type ActivityStep = {
   status: ActivityStepStatus
   kind: ActivityStepKind
   detail?: string
+  startedLabel?: string
+  inputDetail?: string
   requestId?: string
+  toolName?: string
 }
 
 export type ChatMessage = {
@@ -30,13 +37,16 @@ export type ChatMessage = {
   role: ChatRole
   content: string
   meta?: string
+  timestamp?: number
   collapsed?: boolean
   startedAt?: number
   finishedAt?: number
   step?: ActivityStep
   activityGroupId?: number
+  turnId?: string
   isFinal?: boolean
-  changedFiles?: Array<{ path: string; can_undo: boolean }>
+  changedFiles?: Array<{ path: string; can_undo: boolean; additions?: number; deletions?: number }>
+  taskList?: RuntimeTaskListItem[]
 }
 
 let nextMessageId = Date.now()
@@ -67,6 +77,125 @@ function getActivitySummary(kind: ActivityStepKind, status: ActivityStepStatus):
   return '正在使用工具'
 }
 
+function isProgressToolKind(kind: ActivityStepKind): boolean {
+  return !['permission', 'question', 'thinking'].includes(kind)
+}
+
+function isPlanningToolName(toolName?: string): boolean {
+  return toolName === 'create_task_list' || toolName === 'update_plan'
+}
+
+function shouldAdvanceTaskList(kind: ActivityStepKind, toolName?: string): boolean {
+  return isProgressToolKind(kind) && !isPlanningToolName(toolName)
+}
+
+function ensureTaskListProgress(taskList?: RuntimeTaskListItem[]): void {
+  if (!taskList?.length) return
+  if (taskList.some((item) => item.status === 'in_progress')) return
+
+  const nextTask = taskList.find((item) => item.status === 'pending')
+  if (nextTask) {
+    nextTask.status = 'in_progress'
+  }
+}
+
+function advanceTaskListProgress(
+  taskList: RuntimeTaskListItem[] | undefined,
+  status: ActivityStepStatus
+): void {
+  if (!taskList?.length) return
+
+  const activeTask = taskList.find((item) => item.status === 'in_progress')
+  if (!activeTask) {
+    ensureTaskListProgress(taskList)
+    return
+  }
+
+  if (status !== 'success' && status !== 'error') return
+
+  activeTask.status = status === 'success' ? 'completed' : 'error'
+  if (status === 'error') return
+
+  const nextTask = taskList.find((item) => item.status === 'pending')
+  if (nextTask) {
+    nextTask.status = 'in_progress'
+  }
+}
+
+function normalizeRuntimeTaskList(items: RuntimeTaskListItem[]): RuntimeTaskListItem[] {
+  return items
+    .filter((item) => typeof item.step === 'string' && item.step.trim())
+    .slice(0, 5)
+    .map((item, index) => {
+      const status =
+        item.status === 'completed' || item.status === 'error' || item.status === 'in_progress'
+          ? item.status
+          : index === 0
+            ? 'in_progress'
+            : 'pending'
+
+      return {
+        step: item.step.trim(),
+        status
+      }
+    })
+}
+
+function findActivityMessage(
+  messages: ChatMessage[],
+  activeActivityMessageId: number | null,
+  turnId?: string
+): ChatMessage | undefined {
+  const normalizedTurnId = turnId?.trim()
+
+  if (normalizedTurnId) {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (
+        message.role === 'activity' &&
+        message.turnId === normalizedTurnId &&
+        !message.finishedAt
+      ) {
+        return message
+      }
+    }
+  }
+
+  if (activeActivityMessageId) {
+    const activeMessage = messages.find(
+      (message) =>
+        message.id === activeActivityMessageId && message.role === 'activity' && !message.finishedAt
+    )
+    if (activeMessage) return activeMessage
+  }
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message.role === 'activity' && !message.finishedAt) return message
+  }
+
+  return undefined
+}
+
+function replayExistingActivityProgress(
+  taskList: RuntimeTaskListItem[],
+  messages: ChatMessage[],
+  activityGroupId: number
+): void {
+  ensureTaskListProgress(taskList)
+
+  const activityEvents = messages.filter(
+    (message) => message.role === 'activity_event' && message.activityGroupId === activityGroupId
+  )
+  for (const eventMessage of activityEvents) {
+    const step = eventMessage.step
+    if (!step || !shouldAdvanceTaskList(step.kind, step.toolName)) continue
+    if (step.status === 'success' || step.status === 'error') {
+      advanceTaskListProgress(taskList, step.status)
+    }
+  }
+}
+
 function createFallbackConversationTitle(messages: ConversationTitleMessage[]): string {
   const firstUserMessage = messages.find((message) => message.role === 'user')
   const title = firstUserMessage?.content.replace(/\s+/g, ' ').trim()
@@ -84,6 +213,7 @@ export const useChatStore = defineStore('chat', {
     conversationTitleStatus: 'idle' as 'idle' | 'pending' | 'ready' | 'error',
     streamingMessageId: null as number | null,
     activeActivityMessageId: null as number | null,
+    pendingTaskListsByTurn: {} as Record<string, RuntimeTaskListItem[]>,
     messages: [] as ChatMessage[]
   }),
   getters: {
@@ -104,6 +234,7 @@ export const useChatStore = defineStore('chat', {
       this.conversationTitleStatus = 'idle'
       this.streamingMessageId = null
       this.activeActivityMessageId = null
+      this.pendingTaskListsByTurn = {}
       this.messages = []
     },
 
@@ -126,6 +257,7 @@ export const useChatStore = defineStore('chat', {
           id,
           role: message.role,
           content: message.content,
+          timestamp: message.timestamp,
           collapsed: message.role === 'activity' ? (message.collapsed ?? true) : message.collapsed,
           startedAt: message.startedAt,
           finishedAt: message.finishedAt,
@@ -140,7 +272,8 @@ export const useChatStore = defineStore('chat', {
             status: message.step.status,
             kind: message.step.kind,
             detail: message.step.detail,
-            requestId: message.step.requestId
+            requestId: message.step.requestId,
+            toolName: message.step.toolName
           }
         }
 
@@ -153,6 +286,7 @@ export const useChatStore = defineStore('chat', {
       this.conversationTitleStatus = cleanTitle === '新对话' ? 'idle' : 'ready'
       this.streamingMessageId = null
       this.activeActivityMessageId = null
+      this.pendingTaskListsByTurn = {}
       this.messages = restoredMessages.length
         ? restoredMessages
         : [
@@ -263,8 +397,18 @@ export const useChatStore = defineStore('chat', {
       })
     },
 
-    startActivity(): void {
-      if (this.activeActivityMessageId) return
+    startActivity(turnId?: string): void {
+      const activity = findActivityMessage(this.messages, this.activeActivityMessageId, turnId)
+      if (activity) {
+        if (turnId && !activity.turnId) {
+          activity.turnId = turnId
+        }
+        this.activeActivityMessageId = activity.id
+        if (turnId && this.pendingTaskListsByTurn[turnId]?.length) {
+          this.setActiveTaskList(this.pendingTaskListsByTurn[turnId], turnId)
+        }
+        return
+      }
 
       const id = createMessageId()
       this.activeActivityMessageId = id
@@ -273,8 +417,38 @@ export const useChatStore = defineStore('chat', {
         role: 'activity',
         content: '正在思考',
         collapsed: false,
-        startedAt: Date.now()
+        startedAt: Date.now(),
+        turnId: turnId || undefined
       })
+
+      if (turnId && this.pendingTaskListsByTurn[turnId]?.length) {
+        this.setActiveTaskList(this.pendingTaskListsByTurn[turnId], turnId)
+      }
+    },
+
+    setActiveTaskList(items: RuntimeTaskListItem[], turnId?: string): void {
+      const normalizedItems = normalizeRuntimeTaskList(items)
+      if (!normalizedItems.length) return
+
+      let message = findActivityMessage(this.messages, this.activeActivityMessageId, turnId)
+      if (!message) {
+        if (turnId) {
+          this.pendingTaskListsByTurn[turnId] = normalizedItems
+        }
+        this.startActivity(turnId)
+        message = findActivityMessage(this.messages, this.activeActivityMessageId, turnId)
+      }
+      if (!message) return
+
+      if (turnId && !message.turnId) {
+        message.turnId = turnId
+      }
+      message.taskList = normalizedItems
+      replayExistingActivityProgress(message.taskList, this.messages, message.id)
+      this.activeActivityMessageId = message.id
+      if (turnId) {
+        delete this.pendingTaskListsByTurn[turnId]
+      }
     },
 
     finishAssistantSegment(): void {
@@ -290,14 +464,24 @@ export const useChatStore = defineStore('chat', {
     upsertActivityEvent(
       label: string,
       status: ActivityStepStatus,
-      options: { detail?: string; requestId?: string; kind?: ActivityStepKind } = {}
+      options: {
+        detail?: string
+        requestId?: string
+        kind?: ActivityStepKind
+        toolName?: string
+        turnId?: string
+      } = {}
     ): void {
-      if (!this.activeActivityMessageId) {
-        this.startActivity()
+      let message = findActivityMessage(this.messages, this.activeActivityMessageId, options.turnId)
+      if (!message) {
+        this.startActivity(options.turnId)
+        message = findActivityMessage(this.messages, this.activeActivityMessageId, options.turnId)
       }
-
-      const message = this.messages.find((item) => item.id === this.activeActivityMessageId)
       if (!message) return
+      if (options.turnId && !message.turnId) {
+        message.turnId = options.turnId
+      }
+      this.activeActivityMessageId = message.id
 
       const events = this.messages.filter(
         (item) => item.role === 'activity_event' && item.activityGroupId === message.id
@@ -307,16 +491,28 @@ export const useChatStore = defineStore('chat', {
         : undefined
       const kind = options.kind || existing?.step?.kind || 'tool'
       message.content = getActivitySummary(kind, status)
+      if (shouldAdvanceTaskList(kind, options.toolName || existing?.step?.toolName)) {
+        ensureTaskListProgress(message.taskList)
+      }
 
       if (existing) {
         existing.content = label
+        if (status === 'success' || status === 'error') {
+          existing.finishedAt = Date.now()
+        }
         existing.step = {
           id: existing.step?.id || createMessageId(),
           label,
           status,
           kind,
           detail: options.detail,
-          requestId: options.requestId
+          startedLabel: existing.step?.startedLabel || existing.step?.label || existing.content,
+          inputDetail: existing.step?.inputDetail || existing.step?.detail || options.detail,
+          requestId: options.requestId,
+          toolName: options.toolName || existing.step?.toolName
+        }
+        if (shouldAdvanceTaskList(kind, existing.step.toolName)) {
+          advanceTaskListProgress(message.taskList, status)
         }
         return
       }
@@ -327,21 +523,26 @@ export const useChatStore = defineStore('chat', {
         role: 'activity_event',
         content: label,
         activityGroupId: message.id,
+        startedAt: Date.now(),
         step: {
           id: createMessageId(),
           label,
           status,
           kind,
           detail: options.detail,
-          requestId: options.requestId
+          startedLabel: label,
+          inputDetail: options.detail,
+          requestId: options.requestId,
+          toolName: options.toolName
         }
       })
+      if (shouldAdvanceTaskList(kind, options.toolName)) {
+        advanceTaskListProgress(message.taskList, status)
+      }
     },
 
-    finishActivity(status: 'success' | 'error' = 'success'): void {
-      if (!this.activeActivityMessageId) return
-
-      const message = this.messages.find((item) => item.id === this.activeActivityMessageId)
+    finishActivity(status: 'success' | 'error' = 'success', turnId?: string): void {
+      const message = findActivityMessage(this.messages, this.activeActivityMessageId, turnId)
       if (!message) return
 
       const eventMessages = this.messages.filter(
@@ -365,8 +566,20 @@ export const useChatStore = defineStore('chat', {
           eventMessage.step.status = status
         }
       }
+      if (message.taskList?.length) {
+        message.taskList.forEach((task) => {
+          if (task.status === 'in_progress') {
+            task.status = status === 'success' ? 'completed' : 'error'
+          }
+        })
+      }
 
-      this.activeActivityMessageId = null
+      if (this.activeActivityMessageId === message.id) {
+        this.activeActivityMessageId = null
+      }
+      if (turnId) {
+        delete this.pendingTaskListsByTurn[turnId]
+      }
     },
 
     toggleActivity(messageId: number): void {
@@ -401,7 +614,15 @@ export const useChatStore = defineStore('chat', {
       }
     },
 
-    finishAssistantStream(content: string, changedFiles?: Array<{ path: string; can_undo: boolean }>): void {
+    finishAssistantStream(
+      content: string,
+      changedFiles?: Array<{
+        path: string
+        can_undo: boolean
+        additions?: number
+        deletions?: number
+      }>
+    ): void {
       const text = content.trim()
       if (!this.streamingMessageId) {
         if (text) {
@@ -424,6 +645,18 @@ export const useChatStore = defineStore('chat', {
         message.changedFiles = changedFiles
       }
       this.streamingMessageId = null
+    },
+
+    markChangedFileUndone(filePath: string): void {
+      for (const message of this.messages) {
+        if (!message.changedFiles?.length) continue
+
+        for (const file of message.changedFiles) {
+          if (file.path === filePath) {
+            file.can_undo = false
+          }
+        }
+      }
     }
   }
 })

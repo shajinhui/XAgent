@@ -12,6 +12,7 @@ import type {
   RuntimeReasoningEffort,
   RuntimeSessionState,
   RuntimeSessionSummary,
+  RuntimeTaskListItem,
   RuntimeAdditionalRoot,
   RuntimeToolMetadataMap,
   RuntimeWorkspace,
@@ -69,6 +70,99 @@ function parseToolArguments(value: string): Record<string, unknown> {
   } catch {
     return {}
   }
+}
+
+function isPlanningTool(name: string): boolean {
+  return name === 'update_plan' || name === 'create_task_list'
+}
+
+function normalizeTaskStep(value: unknown): string {
+  return String(value || '')
+    .replace(/^[-*•○⋯✓✔✗\d.)、\s]+/, '')
+    .trim()
+}
+
+function normalizeTaskListStatus(value: unknown, index: number): RuntimeTaskListItem['status'] {
+  const status = String(value || '')
+    .trim()
+    .toLowerCase()
+  if (['completed', 'complete', 'done', 'success', '✓', '✔', 'x'].includes(status)) {
+    return 'completed'
+  }
+  if (['in_progress', 'running', 'current', 'progress', '⋯', '…'].includes(status)) {
+    return 'in_progress'
+  }
+  if (['error', 'failed', 'failure', '✗'].includes(status)) return 'error'
+  if (status === 'pending' || status === 'todo' || status === '○') return 'pending'
+  return index === 0 ? 'in_progress' : 'pending'
+}
+
+function normalizeTaskListFromValue(value: unknown): RuntimeTaskListItem[] {
+  const rawItems =
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? ((value as Record<string, unknown>).plan ??
+        (value as Record<string, unknown>).tasks ??
+        (value as Record<string, unknown>).items)
+      : value
+
+  if (!Array.isArray(rawItems)) return []
+
+  return rawItems
+    .map((item, index): RuntimeTaskListItem | null => {
+      if (typeof item === 'object' && item !== null) {
+        const candidate = item as Record<string, unknown>
+        const step = normalizeTaskStep(candidate.step ?? candidate.task ?? candidate.label)
+        if (!step) return null
+        return {
+          step,
+          status: normalizeTaskListStatus(candidate.status, index)
+        }
+      }
+
+      const step = normalizeTaskStep(item)
+      if (!step) return null
+      return {
+        step,
+        status: normalizeTaskListStatus(undefined, index)
+      }
+    })
+    .filter((item): item is RuntimeTaskListItem => Boolean(item))
+}
+
+function extractTaskListFromToolArguments(
+  name: string,
+  rawArguments: string
+): RuntimeTaskListItem[] {
+  if (name !== 'update_plan') return []
+  return normalizeTaskListFromValue(parseToolArguments(rawArguments).plan)
+}
+
+function extractTaskListFromToolResult(name: string, content: string): RuntimeTaskListItem[] {
+  if (!isPlanningTool(name)) return []
+
+  try {
+    const parsed = JSON.parse(content)
+    const tasks = normalizeTaskListFromValue(parsed)
+    if (tasks.length) return tasks
+  } catch {
+    // 规划工具通常返回人类可读文本，这里继续走文本解析。
+  }
+
+  const tasks: RuntimeTaskListItem[] = []
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    const match = trimmed.match(/^([○⋯…✓✔✗-])\s*\d+[.)、]?\s*(.+)$/)
+    if (!match) continue
+
+    const step = normalizeTaskStep(match[2])
+    if (!step) continue
+    tasks.push({
+      step,
+      status: normalizeTaskListStatus(match[1], tasks.length)
+    })
+  }
+
+  return tasks
 }
 
 function getToolKind(name: string): ActivityStepKind {
@@ -263,6 +357,12 @@ function loadWorkspaceProjects(): RuntimeWorkspaceProject[] {
 
 function loadConversationSelectedRoots(): string[] {
   const roots = new Set<string>()
+  const storedProjectRoots = new Set(
+    loadStoredWorkspaceProjectCandidates()
+      .filter(isWorkspaceProject)
+      .map((project) => normalizeSelectedRoot(project.selected_root))
+      .filter((root) => !isDefaultConversationSelectedRoot(root))
+  )
 
   try {
     const rawValue = window.localStorage.getItem(CONVERSATION_WORKSPACES_STORAGE_KEY)
@@ -270,7 +370,13 @@ function loadConversationSelectedRoots(): string[] {
     if (Array.isArray(parsed)) {
       parsed.forEach((root) => {
         if (typeof root === 'string' && root.trim()) {
-          roots.add(normalizeSelectedRoot(root.trim()))
+          const normalizedRoot = normalizeSelectedRoot(root.trim())
+          if (
+            isDefaultConversationSelectedRoot(normalizedRoot) &&
+            !storedProjectRoots.has(normalizedRoot)
+          ) {
+            roots.add(normalizedRoot)
+          }
         }
       })
     }
@@ -392,12 +498,18 @@ export const useRuntimeStore = defineStore('runtime', {
     sessionHistory: [] as RuntimeSessionSummary[],
     sessionsLoading: false,
     selectedSessionId: '',
+    selectedSessionRoot: '',
     workspace: null as RuntimeWorkspace | null,
     workspaceProjects: loadWorkspaceProjects(),
     conversationSelectedRoots: loadConversationSelectedRoots(),
     sessionsBySelectedRoot: loadWorkspaceSessionCache(),
     pendingWorkspaceResume: null as { selected_root: string; sessionId: string } | null,
     pendingConversationSelectedRoot: null as string | null,
+    pendingWorkspaceRequestId: '',
+    pendingWorkspaceRequestRoot: '',
+    pendingResumeRequestId: '',
+    pendingResumeRequestRoot: '',
+    pendingResumeSessionId: '',
     selectedModel: FALLBACK_MODEL_OPTIONS[0],
     modelOptions: [...FALLBACK_MODEL_OPTIONS],
     reasoningEffort: 'off' as RuntimeReasoningEffort,
@@ -413,6 +525,25 @@ export const useRuntimeStore = defineStore('runtime', {
     permissionMode: (state): RuntimePermissionMode => state.globalPermissionMode
   },
   actions: {
+    getActiveWorkspaceRoot(): string {
+      return this.workspace?.selected_root
+        ? normalizeSelectedRoot(this.workspace.selected_root)
+        : ''
+    },
+
+    setSelectedSession(sessionId?: string | null, root?: string | null): void {
+      this.selectedSessionId = sessionId || ''
+      this.selectedSessionRoot = root ? normalizeSelectedRoot(root) : this.getActiveWorkspaceRoot()
+    },
+
+    invalidatePendingResume(root?: string | null): void {
+      this.pendingResumeRequestId = `ignore-resume-${Date.now()}`
+      this.pendingResumeRequestRoot = root
+        ? normalizeSelectedRoot(root)
+        : this.getActiveWorkspaceRoot()
+      this.pendingResumeSessionId = ''
+    },
+
     applyModelConfig(config?: RuntimeModelConfig): void {
       if (!config) return
 
@@ -535,18 +666,34 @@ export const useRuntimeStore = defineStore('runtime', {
       }
     },
 
+    isKnownProjectRoot(root: string): boolean {
+      const normalizedRoot = normalizeSelectedRoot(root)
+      return this.workspaceProjects.some(
+        (project) => normalizeSelectedRoot(project.selected_root) === normalizedRoot
+      )
+    },
+
     isConversationWorkspace(root: string): boolean {
       const normalizedRoot = normalizeSelectedRoot(root)
-      return (
-        isDefaultConversationSelectedRoot(normalizedRoot) ||
-        this.conversationSelectedRoots.includes(normalizedRoot) ||
-        this.pendingConversationSelectedRoot === normalizedRoot
-      )
+      return isDefaultConversationSelectedRoot(normalizedRoot)
+    },
+
+    forgetConversationWorkspace(root: string): void {
+      const normalizedRoot = normalizeSelectedRoot(root)
+      const nextRoots = this.conversationSelectedRoots.filter((item) => item !== normalizedRoot)
+      if (nextRoots.length === this.conversationSelectedRoots.length) return
+
+      this.conversationSelectedRoots = nextRoots
+      this.persistConversationWorkspaces()
     },
 
     rememberConversationWorkspace(root: string): void {
       const normalizedRoot = normalizeSelectedRoot(root)
       if (!normalizedRoot) return
+      if (!isDefaultConversationSelectedRoot(normalizedRoot)) {
+        this.forgetConversationWorkspace(normalizedRoot)
+        return
+      }
 
       this.conversationSelectedRoots = [
         normalizedRoot,
@@ -573,14 +720,11 @@ export const useRuntimeStore = defineStore('runtime', {
         [canonical]: mergeSessionSummaries(canonicalSessions, aliasSessions)
       }
 
+      const canonicalIsKnownProject =
+        !isDefaultConversationSelectedRoot(canonical) && this.isKnownProjectRoot(canonical)
       const isConversationAlias =
-        this.conversationSelectedRoots.some((item) => {
-          const normalizedItem = normalizeSelectedRoot(item)
-          return normalizedItem === alias || normalizedItem === canonical
-        }) ||
-        this.pendingConversationSelectedRoot === alias ||
-        isDefaultConversationSelectedRoot(alias) ||
-        isDefaultConversationSelectedRoot(canonical)
+        !canonicalIsKnownProject &&
+        (isDefaultConversationSelectedRoot(alias) || isDefaultConversationSelectedRoot(canonical))
 
       if (isConversationAlias) {
         this.conversationSelectedRoots = [
@@ -637,16 +781,28 @@ export const useRuntimeStore = defineStore('runtime', {
         this.rememberConversationWorkspace(selectedRoot)
         return
       }
+      if (!isDefaultConversationSelectedRoot(selectedRoot)) {
+        this.forgetConversationWorkspace(selectedRoot)
+      }
 
       const project: RuntimeWorkspaceProject = {
         ...workspace,
         selected_root: selectedRoot,
         updated_at: Date.now()
       }
-      this.workspaceProjects = [
-        project,
-        ...this.workspaceProjects.filter((item) => item.selected_root !== selectedRoot)
-      ].slice(0, MAX_WORKSPACE_PROJECTS)
+      const existingIndex = this.workspaceProjects.findIndex(
+        (item) => normalizeSelectedRoot(item.selected_root) === selectedRoot
+      )
+      if (existingIndex === -1) {
+        this.workspaceProjects = [...this.workspaceProjects, project].slice(
+          0,
+          MAX_WORKSPACE_PROJECTS
+        )
+      } else {
+        this.workspaceProjects = this.workspaceProjects.map((item, index) =>
+          index === existingIndex ? { ...item, ...project } : item
+        )
+      }
       this.persistWorkspaceProjects()
     },
 
@@ -766,12 +922,17 @@ export const useRuntimeStore = defineStore('runtime', {
 
       if (!runtimeSocket?.isOpen) return
 
+      const requestId = `resume-${Date.now()}`
+      this.pendingResumeRequestId = requestId
+      this.pendingResumeRequestRoot = this.getActiveWorkspaceRoot()
+      this.pendingResumeSessionId = sessionId || this.sessionId
       if (sessionId) {
-        this.selectedSessionId = sessionId
+        this.setSelectedSession(sessionId, this.pendingResumeRequestRoot)
       }
 
       runtimeSocket?.send({
         type: 'resume_session',
+        request_id: requestId,
         session_id: sessionId
       })
     },
@@ -790,6 +951,7 @@ export const useRuntimeStore = defineStore('runtime', {
     async startNewConversation(): Promise<void> {
       const chat = useChatStore()
       chat.resetConversation()
+      this.setSelectedSession('', this.getActiveWorkspaceRoot())
       this.activeTurnId = ''
       this.activePermission = null
       this.activeClarification = null
@@ -842,10 +1004,17 @@ export const useRuntimeStore = defineStore('runtime', {
       }
 
       this.pendingWorkspaceResume = { selected_root: root, sessionId }
+      this.setSelectedSession(sessionId, root)
       await this.openWorkspace(path)
     },
 
     async openWorkspace(path: string): Promise<void> {
+      const root = normalizeSelectedRoot(path)
+      const requestId = `workspace-${Date.now()}`
+      this.pendingWorkspaceRequestId = requestId
+      this.pendingWorkspaceRequestRoot = root
+      this.invalidatePendingResume(root)
+      this.setSelectedSession('', root)
       if (!runtimeSocket?.isOpen) {
         await this.connect({ silent: true })
       }
@@ -853,13 +1022,15 @@ export const useRuntimeStore = defineStore('runtime', {
       if (!runtimeSocket?.isOpen) {
         this.pendingWorkspaceResume = null
         this.pendingConversationSelectedRoot = null
+        this.pendingWorkspaceRequestId = ''
+        this.pendingWorkspaceRequestRoot = ''
         this.errorMessage = '后端还没有连接，无法打开工作区。'
         return
       }
 
       runtimeSocket.send({
         type: 'open_workspace',
-        request_id: `workspace-${Date.now()}`,
+        request_id: requestId,
         path
       })
     },
@@ -1007,6 +1178,7 @@ export const useRuntimeStore = defineStore('runtime', {
 
       runtimeSocket.send({
         type: 'undo_file',
+        request_id: `undo-file-${Date.now()}`,
         file_path: filePath
       })
     },
@@ -1045,11 +1217,11 @@ export const useRuntimeStore = defineStore('runtime', {
       switch (event.type) {
         case 'ready':
           this.sessionId = event.session_id
-          this.selectedSessionId = event.session_id
           this.schemaVersion = event.schema_version
           this.tools = event.tools
           this.sessionState = event.session_state
           this.workspace = event.workspace || null
+          this.setSelectedSession(event.session_id, this.getActiveWorkspaceRoot())
           this.applyModelConfig(event.model_config)
           this.rememberWorkspace(this.workspace)
           if (this.workspace?.selected_root) {
@@ -1062,10 +1234,26 @@ export const useRuntimeStore = defineStore('runtime', {
           this.requestConversationTitle()
           break
         case 'workspace_changed':
+          if (
+            this.pendingWorkspaceRequestId &&
+            event.request_id &&
+            event.request_id !== this.pendingWorkspaceRequestId
+          ) {
+            break
+          }
+          if (
+            this.pendingWorkspaceRequestRoot &&
+            normalizeSelectedRoot(event.workspace.selected_root) !==
+              this.pendingWorkspaceRequestRoot
+          ) {
+            break
+          }
+          this.pendingWorkspaceRequestId = ''
+          this.pendingWorkspaceRequestRoot = ''
           this.sessionId = event.session_id
-          this.selectedSessionId = event.session_id
           this.sessionState = event.session_state
           this.workspace = event.workspace
+          this.setSelectedSession(event.session_id, event.workspace.selected_root)
           this.reconcileSelectedRootAlias(
             this.pendingWorkspaceResume?.selected_root || this.pendingConversationSelectedRoot,
             event.workspace.selected_root
@@ -1130,13 +1318,22 @@ export const useRuntimeStore = defineStore('runtime', {
         case 'turn_started':
           this.activeTurnId = event.turn_id
           this.sessionState = event.session_state
-          chat.startActivity()
+          chat.startActivity(event.turn_id)
+          break
+        case 'task_list':
+          chat.setActiveTaskList(event.items || [], event.turn_id || this.activeTurnId)
+          break
+        case 'file_undone':
+          chat.markChangedFileUndone(event.file_path)
           break
         case 'session_created':
           this.sessionId = event.session_id
-          this.selectedSessionId = event.session_id
           this.sessionState = event.session_state
           this.workspace = event.workspace || this.workspace
+          this.setSelectedSession(event.session_id, this.getActiveWorkspaceRoot())
+          this.pendingResumeRequestId = ''
+          this.pendingResumeRequestRoot = ''
+          this.pendingResumeSessionId = ''
           this.rememberWorkspace(this.workspace)
           if (this.workspace?.selected_root) {
             this.sessionHistory =
@@ -1180,71 +1377,100 @@ export const useRuntimeStore = defineStore('runtime', {
           }
           if (event.deleted_current) {
             this.sessionId = event.session_id || this.sessionId
-            this.selectedSessionId = event.session_id || this.selectedSessionId
+            this.setSelectedSession(
+              event.session_id || this.sessionId,
+              this.getActiveWorkspaceRoot()
+            )
             this.sessionState = event.session_state
             this.activeTurnId = ''
             this.activePermission = null
             this.activeClarification = null
             chat.resetConversation()
           } else if (this.selectedSessionId === event.deleted_session_id) {
-            this.selectedSessionId = this.sessionId
+            this.setSelectedSession(this.sessionId, this.getActiveWorkspaceRoot())
           }
           break
         case 'assistant_token':
           chat.appendAssistantToken(event.token)
           break
-        case 'tool_call_started':
+        case 'tool_call_started': {
+          const turnId = event.turn_id || this.activeTurnId
+          const toolTaskList = extractTaskListFromToolArguments(event.name, event.arguments)
+          if (toolTaskList.length) {
+            chat.setActiveTaskList(toolTaskList, turnId)
+          }
           chat.upsertActivityEvent(formatToolStartLabel(event.name, event.arguments), 'running', {
             requestId: event.request_id,
             kind: getToolKind(event.name),
-            detail: formatToolDetail(event.arguments)
+            detail: formatToolDetail(event.arguments),
+            toolName: event.name,
+            turnId
           })
           break
-        case 'tool_call_result':
+        }
+        case 'tool_call_result': {
+          const turnId = event.turn_id || this.activeTurnId
+          const toolTaskList = event.ok
+            ? extractTaskListFromToolResult(event.name, event.content)
+            : []
+          if (toolTaskList.length) {
+            chat.setActiveTaskList(toolTaskList, turnId)
+          }
           chat.upsertActivityEvent(
             formatToolResultLabel(event.name, event.ok),
             event.ok ? 'success' : 'error',
             {
               requestId: event.request_id,
               kind: getToolKind(event.name),
-              detail: event.content
+              detail: event.content,
+              toolName: event.name,
+              turnId
             }
           )
           break
+        }
         case 'permission_request':
           this.activePermission = event
           this.activeClarification = null
           chat.upsertActivityEvent(`等待权限确认：${formatToolLabel(event)}`, 'waiting', {
             requestId: event.request_id,
             kind: 'permission',
-            detail: event.detail
+            detail: event.detail,
+            toolName: event.tool,
+            turnId: event.turn_id || this.activeTurnId
           })
           break
-        case 'permission_decision_ack':
+        case 'permission_decision_ack': {
+          const tool = this.activePermission?.tool
           this.activePermission = null
           chat.upsertActivityEvent(
             event.approved ? '权限已允许' : '权限已拒绝',
             event.approved ? 'success' : 'error',
             {
               requestId: event.request_id,
-              kind: 'permission'
+              kind: 'permission',
+              toolName: tool,
+              turnId: event.turn_id || this.activeTurnId
             }
           )
           break
+        }
         case 'clarification_request':
           this.activeClarification = event
           this.activePermission = null
           chat.upsertActivityEvent(`正在询问：${formatClarificationLabel(event)}`, 'waiting', {
             requestId: event.request_id,
             kind: 'question',
-            detail: formatClarificationDetail(event)
+            detail: formatClarificationDetail(event),
+            turnId: event.turn_id || this.activeTurnId
           })
           break
         case 'clarification_response_ack':
           this.activeClarification = null
           chat.upsertActivityEvent(event.skipped ? '已跳过问题' : '已收到回答', 'success', {
             requestId: event.request_id,
-            kind: 'question'
+            kind: 'question',
+            turnId: event.turn_id || this.activeTurnId
           })
           break
         case 'session_suspended':
@@ -1258,17 +1484,36 @@ export const useRuntimeStore = defineStore('runtime', {
           chat.addSystemMessage('正在取消当前回合...')
           break
         case 'turn_cancelled':
-          this.sessionState = event.session_state
-          this.activeTurnId = ''
-          this.activePermission = null
-          this.activeClarification = null
-          chat.addSystemMessage(event.detail || '当前回合已取消。')
-          chat.finishActivity('error')
+          {
+            const turnId = event.turn_id || this.activeTurnId
+            this.sessionState = event.session_state
+            this.activeTurnId = ''
+            this.activePermission = null
+            this.activeClarification = null
+            chat.addSystemMessage(event.detail || '当前回合已取消。')
+            chat.finishActivity('error', turnId)
+          }
           break
         case 'session_resumed':
+          if (
+            this.pendingResumeRequestId &&
+            event.request_id &&
+            event.request_id !== this.pendingResumeRequestId
+          ) {
+            break
+          }
+          if (
+            this.pendingResumeRequestRoot &&
+            event.workspace?.selected_root &&
+            normalizeSelectedRoot(event.workspace.selected_root) !== this.pendingResumeRequestRoot
+          ) {
+            break
+          }
+          this.pendingResumeRequestId = ''
+          this.pendingResumeRequestRoot = ''
+          this.pendingResumeSessionId = ''
           if (event.session_id) {
             this.sessionId = event.session_id
-            this.selectedSessionId = event.session_id
           }
           this.sessionState = event.session_state
           if (event.workspace) {
@@ -1279,6 +1524,7 @@ export const useRuntimeStore = defineStore('runtime', {
             this.workspace = event.workspace
             this.rememberWorkspace(event.workspace)
           }
+          this.setSelectedSession(event.session_id || this.sessionId, this.getActiveWorkspaceRoot())
           this.activeClarification = null
           if (event.resumed_from_disk) {
             chat.loadConversation(event.messages || [], event.session?.title || '历史会话')
@@ -1290,13 +1536,16 @@ export const useRuntimeStore = defineStore('runtime', {
           this.requestConversationTitle()
           break
         case 'final_answer':
-          this.sessionState = event.session_state
-          this.activeTurnId = ''
-          this.activeClarification = null
-          chat.finishActivity('success')
-          chat.finishAssistantStream(event.content, event.changed_files)
-          this.requestSessions()
-          this.requestConversationTitle()
+          {
+            const turnId = event.turn_id || this.activeTurnId
+            this.sessionState = event.session_state
+            this.activeTurnId = ''
+            this.activeClarification = null
+            chat.finishActivity('success', turnId)
+            chat.finishAssistantStream(event.content, event.changed_files)
+            this.requestSessions()
+            this.requestConversationTitle()
+          }
           break
         case 'conversation_title':
           chat.finishConversationTitleRequest(event.title, event.request_id)
@@ -1306,8 +1555,30 @@ export const useRuntimeStore = defineStore('runtime', {
         case 'workspace_error':
           this.errorMessage = event.message
           if (event.type === 'workspace_error') {
+            if (
+              this.pendingWorkspaceRequestId &&
+              event.request_id &&
+              event.request_id !== this.pendingWorkspaceRequestId
+            ) {
+              break
+            }
+            if (
+              this.pendingWorkspaceRequestRoot &&
+              event.requested_workspace &&
+              normalizeSelectedRoot(event.requested_workspace) !== this.pendingWorkspaceRequestRoot
+            ) {
+              break
+            }
             this.pendingWorkspaceResume = null
             this.pendingConversationSelectedRoot = null
+            this.pendingWorkspaceRequestId = ''
+            this.pendingWorkspaceRequestRoot = ''
+            if (event.workspace) {
+              this.workspace = event.workspace
+              this.setSelectedSession(this.sessionId, event.workspace.selected_root)
+            } else {
+              this.setSelectedSession(this.sessionId, this.getActiveWorkspaceRoot())
+            }
             if (event.requested_permission_mode) {
               const activeMode = normalizePermissionMode(event.workspace?.policy?.permission_mode)
               if (activeMode) {
@@ -1326,9 +1597,10 @@ export const useRuntimeStore = defineStore('runtime', {
           chat.upsertActivityEvent('后端错误', 'error', {
             requestId: event.request_id,
             kind: 'error',
-            detail: event.message
+            detail: event.message,
+            turnId: event.turn_id || this.activeTurnId
           })
-          chat.finishActivity('error')
+          chat.finishActivity('error', event.turn_id || this.activeTurnId)
           break
       }
     }

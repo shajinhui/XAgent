@@ -24,6 +24,7 @@ import ChatComposer from '@renderer/components/ChatComposer.vue'
 import ClarificationDialog from '@renderer/components/ClarificationDialog.vue'
 import MessageList from '@renderer/components/MessageList.vue'
 import PermissionDialog from '@renderer/components/PermissionDialog.vue'
+import TaskRunCard from '@renderer/components/TaskRunCard.vue'
 import TitleBar from '@renderer/components/TitleBar.vue'
 import { useChatStore } from '@renderer/stores/chat'
 import { useRuntimeStore } from '@renderer/stores/runtime'
@@ -88,18 +89,23 @@ const themeStatus = computed(() => {
   if (theme.mode !== 'system') return theme.label
   return `跟随系统 · ${theme.resolved === 'dark' ? '深色' : '浅色'}`
 })
+const projectRootSet = computed(
+  () => new Set(visibleProjects.value.map((project) => project.selected_root))
+)
 const conversationSessions = computed<ConversationSessionItem[]>(() => {
-  const candidates = runtime.conversationSelectedRoots.flatMap((root) => {
-    const workspaceSessions =
-      runtime.workspace?.selected_root === root && runtime.sessionHistory.length
-        ? runtime.sessionHistory
-        : runtime.sessionsBySelectedRoot[root] || []
+  const candidates = runtime.conversationSelectedRoots
+    .filter((root) => !projectRootSet.value.has(root))
+    .flatMap((root) => {
+      const workspaceSessions =
+        runtime.workspace?.selected_root === root && runtime.sessionHistory.length
+          ? runtime.sessionHistory
+          : runtime.sessionsBySelectedRoot[root] || []
 
-    return workspaceSessions.map((session) => ({
-      ...session,
-      selectedRoot: root
-    }))
-  })
+      return workspaceSessions.map((session) => ({
+        ...session,
+        selectedRoot: root
+      }))
+    })
 
   const seen = new Set<string>()
   return candidates
@@ -110,8 +116,17 @@ const conversationSessions = computed<ConversationSessionItem[]>(() => {
       return true
     })
 })
-const conversationSessionIds = computed(
-  () => new Set(conversationSessions.value.map((session) => session.session_id))
+function getSessionKey(root: string, sessionId: string): string {
+  return `${root}:${sessionId}`
+}
+
+const conversationSessionKeys = computed(
+  () =>
+    new Set(
+      conversationSessions.value.map((session) =>
+        getSessionKey(session.selectedRoot, session.session_id)
+      )
+    )
 )
 
 const composerPlaceholder = computed(() => {
@@ -155,7 +170,15 @@ function sessionsForProject(root: string): RuntimeSessionSummary[] {
 
 function projectSessionsForDisplay(root: string): RuntimeSessionSummary[] {
   return sessionsForProject(root).filter(
-    (session) => !conversationSessionIds.value.has(session.session_id)
+    (session) => !conversationSessionKeys.value.has(getSessionKey(root, session.session_id))
+  )
+}
+
+function isSessionSelected(root: string, sessionId: string): boolean {
+  return (
+    runtime.selectedSessionId === sessionId &&
+    runtime.selectedSessionRoot === root &&
+    runtime.workspace?.selected_root === root
   )
 }
 
@@ -403,15 +426,15 @@ onBeforeUnmount(() => {
           <MessageSquarePlus />
           <span>新对话</span>
         </button>
-        <button type="button" class="sidebar-action">
+        <button type="button" class="sidebar-action" title="搜索功能稍后接入" disabled>
           <Search />
           <span>搜索</span>
         </button>
-        <button type="button" class="sidebar-action">
+        <button type="button" class="sidebar-action" title="插件功能稍后接入" disabled>
           <Blocks />
           <span>插件</span>
         </button>
-        <button type="button" class="sidebar-action">
+        <button type="button" class="sidebar-action" title="自动化功能稍后接入" disabled>
           <Clock3 />
           <span>自动化</span>
         </button>
@@ -485,7 +508,9 @@ onBeforeUnmount(() => {
                   :key="session.session_id"
                   type="button"
                   class="sidebar-item"
-                  :class="{ selected: session.session_id === runtime.selectedSessionId }"
+                  :class="{
+                    selected: isSessionSelected(project.selected_root, session.session_id)
+                  }"
                   :title="session.last_message || session.title"
                   @click="void resumeConversation(project.selected_root, session.session_id)"
                   @contextmenu="openSessionContextMenu($event, session, project.selected_root)"
@@ -516,9 +541,9 @@ onBeforeUnmount(() => {
 
         <div class="sidebar-section conversation-section">
           <div class="sidebar-section-heading">
-            <button type="button" class="sidebar-heading-main">
+            <div class="sidebar-heading-main sidebar-heading-static">
               <span>对话</span>
-            </button>
+            </div>
             <div class="sidebar-heading-actions" aria-label="对话操作">
               <button
                 type="button"
@@ -535,7 +560,7 @@ onBeforeUnmount(() => {
             :key="session.session_id"
             type="button"
             class="sidebar-item conversation-item"
-            :class="{ selected: session.session_id === runtime.selectedSessionId }"
+            :class="{ selected: isSessionSelected(session.selectedRoot, session.session_id) }"
             :title="session.last_message || session.title"
             @click="void resumeConversation(session.selectedRoot, session.session_id)"
             @contextmenu="openSessionContextMenu($event, session, session.selectedRoot)"
@@ -715,6 +740,10 @@ onBeforeUnmount(() => {
         </section>
       </div>
       <template v-else>
+        <TaskRunCard
+          :messages="chat.messages"
+          :active-activity-message-id="chat.activeActivityMessageId"
+        />
         <MessageList :messages="chat.messages" />
         <div class="composer-zone">
           <PermissionDialog

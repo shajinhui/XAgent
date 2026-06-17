@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ChevronDown, Paperclip, SendHorizontal, Shield } from '@lucide/vue'
 import IconButton from '@renderer/components/ui/IconButton.vue'
 import type { RuntimePermissionMode } from '@renderer/types/runtimeEvents'
@@ -26,6 +26,15 @@ const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const isSubmitting = ref(false)
 const permissionMenuOpen = ref(false)
 let submitUnlockTimer: number | null = null
+
+function adjustTextareaHeight(): void {
+  if (!textareaRef.value) return
+
+  textareaRef.value.style.height = 'auto'
+  const scrollHeight = textareaRef.value.scrollHeight
+  const maxHeight = 200 // 最大高度约8行
+  textareaRef.value.style.height = `${Math.min(scrollHeight, maxHeight)}px`
+}
 const reasoningLabels: Record<string, string> = {
   off: '思考 关',
   low: '思考 低',
@@ -87,6 +96,7 @@ function clearDraft(): void {
   draft.value = ''
   if (textareaRef.value) {
     textareaRef.value.value = ''
+    textareaRef.value.style.height = 'auto'
   }
 }
 
@@ -123,6 +133,10 @@ function handleEnter(event: KeyboardEvent): void {
   sendMessage()
 }
 
+watch(draft, () => {
+  adjustTextareaHeight()
+})
+
 onBeforeUnmount(() => {
   if (submitUnlockTimer) {
     window.clearTimeout(submitUnlockTimer)
@@ -139,6 +153,7 @@ onBeforeUnmount(() => {
       :disabled="disabled || isSubmitting"
       rows="1"
       @keydown.enter.exact="handleEnter"
+      @input="adjustTextareaHeight"
     ></textarea>
 
     <div class="composer-actions">

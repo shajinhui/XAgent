@@ -3,12 +3,14 @@ import {
   dialog,
   ipcMain,
   nativeTheme,
+  screen,
   shell,
   BrowserWindow,
-  type OpenDialogOptions
+  type OpenDialogOptions,
+  type Rectangle
 } from 'electron'
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
-import { existsSync } from 'fs'
+import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import { mkdir, readFile, writeFile } from 'fs/promises'
 import { createConnection } from 'net'
 import { homedir } from 'os'
@@ -21,14 +23,28 @@ const BACKEND_PORT = 8000
 type ThemeMode = 'system' | 'light' | 'dark'
 type ResolvedTheme = 'light' | 'dark'
 type ThemeState = { mode: ThemeMode; resolved: ResolvedTheme }
+type WindowBoundsState = {
+  width: number
+  height: number
+  x?: number
+  y?: number
+  isMaximized?: boolean
+}
 
 const THEME_CONFIG_FILE = 'theme-preferences.json'
+const WINDOW_STATE_FILE = 'window-state.json'
+const DEFAULT_WINDOW_BOUNDS: WindowBoundsState = { width: 1080, height: 936 }
+const MIN_WINDOW_WIDTH = 760
+const MIN_WINDOW_HEIGHT = 760
+const WINDOW_STATE_SAVE_DELAY_MS = 250
 const THEME_WINDOW_BACKGROUND: Record<ResolvedTheme, string> = {
   dark: '#20252d',
   light: '#f4f6f8'
 }
 let backendProcess: ChildProcessWithoutNullStreams | null = null
 let themeMode: ThemeMode = 'system'
+let windowBoundsState: WindowBoundsState | null = null
+let windowStateSaveTimer: ReturnType<typeof setTimeout> | null = null
 
 function resolveBackendRoot(): string {
   if (is.dev) {
@@ -165,6 +181,136 @@ async function saveThemePreference(mode: ThemeMode): Promise<void> {
   await writeFile(themeConfigPath(), JSON.stringify({ mode }, null, 2), 'utf8')
 }
 
+function windowStatePath(): string {
+  return join(app.getPath('userData'), WINDOW_STATE_FILE)
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function normalizeWindowState(value: unknown): WindowBoundsState | null {
+  if (!value || typeof value !== 'object') return null
+
+  const record = value as Record<string, unknown>
+  if (!isFiniteNumber(record.width) || !isFiniteNumber(record.height)) return null
+
+  const state: WindowBoundsState = {
+    width: Math.max(MIN_WINDOW_WIDTH, Math.round(record.width)),
+    height: Math.max(MIN_WINDOW_HEIGHT, Math.round(record.height)),
+    isMaximized: record.isMaximized === true
+  }
+
+  if (isFiniteNumber(record.x) && isFiniteNumber(record.y)) {
+    state.x = Math.round(record.x)
+    state.y = Math.round(record.y)
+  }
+
+  return state
+}
+
+async function loadWindowState(): Promise<void> {
+  try {
+    const raw = await readFile(windowStatePath(), 'utf8')
+    windowBoundsState = normalizeWindowState(JSON.parse(raw))
+  } catch {
+    windowBoundsState = null
+  }
+}
+
+function normalizeSavedBounds(window: BrowserWindow): WindowBoundsState {
+  const bounds = window.getNormalBounds()
+  const state: WindowBoundsState = {
+    width: Math.max(MIN_WINDOW_WIDTH, Math.round(bounds.width)),
+    height: Math.max(MIN_WINDOW_HEIGHT, Math.round(bounds.height)),
+    isMaximized: window.isMaximized()
+  }
+
+  if (isFiniteNumber(bounds.x) && isFiniteNumber(bounds.y)) {
+    state.x = Math.round(bounds.x)
+    state.y = Math.round(bounds.y)
+  }
+
+  return state
+}
+
+async function saveWindowState(window: BrowserWindow): Promise<void> {
+  if (window.isDestroyed()) return
+
+  windowBoundsState = normalizeSavedBounds(window)
+  await mkdir(app.getPath('userData'), { recursive: true })
+  await writeFile(windowStatePath(), JSON.stringify(windowBoundsState, null, 2), 'utf8')
+}
+
+function saveWindowStateSync(window: BrowserWindow): void {
+  if (window.isDestroyed()) return
+
+  windowBoundsState = normalizeSavedBounds(window)
+  mkdirSync(app.getPath('userData'), { recursive: true })
+  writeFileSync(windowStatePath(), JSON.stringify(windowBoundsState, null, 2), 'utf8')
+}
+
+function queueWindowStateSave(window: BrowserWindow): void {
+  if (window.isDestroyed()) return
+
+  if (windowStateSaveTimer) {
+    clearTimeout(windowStateSaveTimer)
+  }
+
+  windowStateSaveTimer = setTimeout(() => {
+    windowStateSaveTimer = null
+    void saveWindowState(window).catch((error) => {
+      console.error(`Failed to save window state: ${String(error)}`)
+    })
+  }, WINDOW_STATE_SAVE_DELAY_MS)
+}
+
+function flushWindowStateSave(window: BrowserWindow): void {
+  if (windowStateSaveTimer) {
+    clearTimeout(windowStateSaveTimer)
+    windowStateSaveTimer = null
+  }
+
+  try {
+    saveWindowStateSync(window)
+  } catch (error) {
+    console.error(`Failed to save window state: ${String(error)}`)
+  }
+}
+
+function doRectanglesOverlap(a: Rectangle, b: Rectangle): boolean {
+  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
+}
+
+function getInitialWindowBounds(): WindowBoundsState {
+  const saved = windowBoundsState ?? DEFAULT_WINDOW_BOUNDS
+  const primaryWorkArea = screen.getPrimaryDisplay().workArea
+  const state: WindowBoundsState = {
+    width: Math.max(MIN_WINDOW_WIDTH, Math.min(saved.width, primaryWorkArea.width)),
+    height: Math.max(MIN_WINDOW_HEIGHT, Math.min(saved.height, primaryWorkArea.height)),
+    isMaximized: saved.isMaximized
+  }
+
+  if (isFiniteNumber(saved.x) && isFiniteNumber(saved.y)) {
+    const restoredBounds: Rectangle = {
+      x: saved.x,
+      y: saved.y,
+      width: state.width,
+      height: state.height
+    }
+    const isVisible = screen
+      .getAllDisplays()
+      .some((display) => doRectanglesOverlap(restoredBounds, display.workArea))
+
+    if (isVisible) {
+      state.x = saved.x
+      state.y = saved.y
+    }
+  }
+
+  return state
+}
+
 function syncWindowTheme(window: BrowserWindow, state = getThemeState()): void {
   window.setBackgroundColor(THEME_WINDOW_BACKGROUND[state.resolved])
   window.webContents.send('theme:changed', state)
@@ -181,12 +327,15 @@ function syncAllWindowThemes(): ThemeState {
 function createWindow(): void {
   const isMac = process.platform === 'darwin'
   const themeState = getThemeState()
+  const initialWindowBounds = getInitialWindowBounds()
 
   const mainWindow = new BrowserWindow({
-    width: 1080,
-    height: 936,
-    minWidth: 760,
-    minHeight: 760,
+    width: initialWindowBounds.width,
+    height: initialWindowBounds.height,
+    x: initialWindowBounds.x,
+    y: initialWindowBounds.y,
+    minWidth: MIN_WINDOW_WIDTH,
+    minHeight: MIN_WINDOW_HEIGHT,
     show: false,
     autoHideMenuBar: true,
     resizable: true,
@@ -200,9 +349,19 @@ function createWindow(): void {
     }
   })
 
+  if (initialWindowBounds.isMaximized) {
+    mainWindow.maximize()
+  }
+
   if (isMac) {
     mainWindow.setWindowButtonPosition({ x: 18, y: 12 })
   }
+
+  mainWindow.on('resize', () => queueWindowStateSave(mainWindow))
+  mainWindow.on('move', () => queueWindowStateSave(mainWindow))
+  mainWindow.on('maximize', () => queueWindowStateSave(mainWindow))
+  mainWindow.on('unmaximize', () => queueWindowStateSave(mainWindow))
+  mainWindow.on('close', () => flushWindowStateSave(mainWindow))
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
@@ -280,7 +439,7 @@ app.whenReady().then(() => {
     syncAllWindowThemes()
   })
 
-  void loadThemePreference()
+  void Promise.all([loadThemePreference(), loadWindowState()])
     .then(() => startBackend())
     .finally(() => {
       createWindow()
