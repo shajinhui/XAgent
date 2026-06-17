@@ -787,16 +787,20 @@ final_answer
 
 最近一次本地验证结果：
 
-- `.venv/bin/python -m unittest discover -s tests` 通过。
-- 当前单测数量：201。
-- `ToolRegistry` 能加载 7 个工具 schema。
+- `.venv/bin/python -m unittest discover -s tests` 当前通过。
+- 当前单测数量：270。
+- `ToolRegistry` 能加载 12 个工具 schema。
 - `read_file README.md` 可正常执行。
+- `list_files`、`file_search`、`run_tests`、`update_plan` 和 `create_task_list` 已进入默认工具目录。
+- `run_tests` 已走 command executor、filesystem policy、network policy 和 sandbox mode，不再直接 `subprocess.run`。
+- `update_plan` / `create_task_list` 已标记为写 runtime task state 的 mutating 工具，默认需要审批。
 - 读取 `/etc/passwd` 会被路径越界策略拦截。
 - 执行 `rm -rf /` 会被危险命令策略拦截。
 - 非白名单命令会返回 `permission_action=ask`。
 - 简单只读探索命令、窄范围只读 `find ... | sort` 管道和只读 Git 查询可直接进入 `run_command`，常见但可能变更项目的命令仍会在执行前请求用户确认。
 - `write_file` / `edit_file` 在未批准时会返回 `permission_action=ask`。
 - WebSocket event helper、streaming tool call 拼接、session suspend/resume 状态有单元测试覆盖。
+- WebSocket `task_list -> final_answer` 事件序列有集成测试覆盖。
 - session store、JSONL transcript、历史会话摘要、模型上下文恢复和首条用户提问标题生成有单元测试覆盖。
 - `.env` 和 `.git` 相关受保护路径会被策略拦截。
 - macOS Seatbelt profile 会按 filesystem/network policy 生成，测试覆盖 readable/writable roots、additional roots 和默认 network restricted。
@@ -839,7 +843,10 @@ final_answer
 - `change_directory`、`add_dir` 和 `workspace_policy_changed` 第一版。
 - `.env` read/write 保护和 `.codex-mini` write 保护。
 - 基于首条用户提问的 conversation title 生成。
+- user turn 进入模型前的 `task_list` 生成和前端事件。
 - `edit_file` dry-run 预览。
+- `list_files` 文件枚举、`file_search` 文件名模糊搜索、`run_tests` 测试摘要工具。
+- `update_plan` / `create_task_list` 轻量任务追踪工具。
 - Electron/Vue 桌面客户端基础壳和 runtime WebSocket 接入。
 - Electron 原生打开工作区入口。
 - 桌面端 Markdown 渲染与基础清洗。
@@ -854,6 +861,7 @@ final_answer
 - workspace 当前完成后端协议闭环、Electron 原生目录选择入口、workspace 内 `run_command.cwd`、`change_directory`、`add_dir`、resume 重新验证、project instructions 分层加载和 `selected_root/project_root/current_dir` 分离。
 - 权限系统已有 `allow/deny/ask` 决策、统一 filesystem policy、prefix exec policy、runtime permission mode 和 policy-driven Seatbelt 第一版，但还不是完整可编辑 project policy。
 - session transcript 可以恢复模型上下文和持久挂起状态，但更完整的 checkpoint/restore 还未产品化。
+- `run_tests` 已接入 sandbox/permission 边界，但测试框架识别和失败解析仍是第一版启发式实现。
 - 桌面客户端已有 runtime shell，但还需要 smoke test、交互 polish 和错误状态收口。
 
 ### 未完成
