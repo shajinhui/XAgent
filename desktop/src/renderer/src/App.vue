@@ -24,6 +24,7 @@ import ChatComposer from '@renderer/components/ChatComposer.vue'
 import ClarificationDialog from '@renderer/components/ClarificationDialog.vue'
 import MessageList from '@renderer/components/MessageList.vue'
 import PermissionDialog from '@renderer/components/PermissionDialog.vue'
+import PlanReviewCard from '@renderer/components/PlanReviewCard.vue'
 import TaskRunCard from '@renderer/components/TaskRunCard.vue'
 import TitleBar from '@renderer/components/TitleBar.vue'
 import { useChatStore } from '@renderer/stores/chat'
@@ -132,11 +133,16 @@ const conversationSessionKeys = computed(
 const composerPlaceholder = computed(() => {
   if (runtime.isSuspended) return '会话已挂起，请先恢复...'
   if (runtime.isConnecting) return '正在连接后端...'
+  if (runtime.pendingPlan) return '计划待确认...'
   return '输入消息...'
 })
 
 const composerDisabled = computed(
-  () => runtime.isConnecting || runtime.isSuspended || Boolean(runtime.activeTurnId)
+  () =>
+    runtime.isConnecting ||
+    runtime.isSuspended ||
+    Boolean(runtime.activeTurnId) ||
+    Boolean(runtime.pendingPlan)
 )
 function toggleSidebar(): void {
   sidebarOpen.value = !sidebarOpen.value
@@ -758,6 +764,13 @@ onBeforeUnmount(() => {
             @answer="runtime.answerClarification"
             @skip="runtime.skipClarification"
           />
+          <PlanReviewCard
+            v-else-if="runtime.pendingPlan"
+            :plan="runtime.pendingPlan"
+            :disabled="runtime.isConnecting || Boolean(runtime.activeTurnId)"
+            @confirm="runtime.confirmPlan(runtime.pendingPlan?.plan_id)"
+            @cancel="runtime.cancelPlan(runtime.pendingPlan?.plan_id)"
+          />
           <ChatComposer
             v-else
             :disabled="composerDisabled"
@@ -768,6 +781,7 @@ onBeforeUnmount(() => {
             :reasoning-options="runtime.reasoningEffortOptions"
             :permission-mode="runtime.permissionMode"
             @send="runtime.sendUserInput"
+            @plan="runtime.requestPlan"
             @update:model="runtime.setSelectedModel"
             @update:reasoning-effort="runtime.setReasoningEffort"
             @update:permission-mode="runtime.setPermissionMode"

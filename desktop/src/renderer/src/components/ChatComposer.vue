@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { ChevronDown, Paperclip, SendHorizontal, Shield } from '@lucide/vue'
+import { ChevronDown, ListChecks, Paperclip, SendHorizontal, Shield } from '@lucide/vue'
 import IconButton from '@renderer/components/ui/IconButton.vue'
 import type { RuntimePermissionMode } from '@renderer/types/runtimeEvents'
 
@@ -16,6 +16,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   send: [content: string]
+  plan: [content: string]
   'update:model': [model: string]
   'update:reasoningEffort': [effort: string]
   'update:permissionMode': [mode: RuntimePermissionMode]
@@ -126,6 +127,21 @@ function sendMessage(): void {
   unlockSubmitSoon()
 }
 
+function requestPlan(): void {
+  if (props.disabled || isSubmitting.value) return
+
+  const text = draft.value.trim()
+  if (!text) {
+    clearDraft()
+    return
+  }
+
+  isSubmitting.value = true
+  clearDraft()
+  emit('plan', text)
+  unlockSubmitSoon()
+}
+
 function handleEnter(event: KeyboardEvent): void {
   if (event.isComposing) return
 
@@ -161,6 +177,16 @@ onBeforeUnmount(() => {
         <IconButton label="添加附件" variant="soft">
           <Paperclip />
         </IconButton>
+        <button
+          class="plan-button"
+          type="button"
+          aria-label="生成计划"
+          :disabled="disabled || isSubmitting"
+          @click="requestPlan"
+        >
+          <ListChecks />
+          <span>计划</span>
+        </button>
         <div class="permission-mode-control">
           <button
             class="permission-mode-trigger"
