@@ -163,6 +163,98 @@ class ServerWebSocketTests(unittest.TestCase):
                 ],
             )
 
+    def test_plan_confirm_executes_original_user_input(self) -> None:
+        async def fake_run_turn(
+            ws,
+            session_store,
+            turn_context,
+        ):
+            assistant = {"role": "assistant", "content": f"done: {turn_context.user.user_input}"}
+            turn_context.history.append_assistant_message(assistant)
+            record_transcript_event(
+                session_store,
+                turn_context.session_id,
+                "assistant_message",
+                assistant_transcript_payload(assistant, turn_context.turn_id),
+            )
+            return turn_context.history
+
+        plan_items = [
+            {"step": "分析需求", "status": "in_progress"},
+            {"step": "实现改动", "status": "pending"},
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            contexts = []
+            original_create = WebSocketRuntimeContext.create
+
+            def create_temp_context(project_root, system_prompt):
+                context = original_create(Path(tmp), system_prompt)
+                contexts.append(context)
+                return context
+
+            with patch("server.app.WebSocketRuntimeContext.create", side_effect=create_temp_context):
+                with patch("server.app.run_turn", side_effect=fake_run_turn):
+                    with patch(
+                        "server.processors.request_dispatcher.generate_task_list",
+                        return_value=(plan_items, "test-plan-model"),
+                    ):
+                        with patch(
+                            "server.app.generate_task_list",
+                            side_effect=AssertionError("confirmed plan should reuse pending task list"),
+                        ):
+                            with TestClient(app) as client:
+                                with client.websocket_connect("/agent/ws") as ws:
+                                    ready = ws.receive_json()
+                                    ws.send_json(
+                                        {
+                                            "type": "plan_request",
+                                            "content": "实现 Plan Mode",
+                                            "request_id": "plan-1",
+                                        }
+                                    )
+                                    pending = ws.receive_json()
+                                    ws.send_json(
+                                        {
+                                            "type": "plan_confirm",
+                                            "plan_id": pending["plan_id"],
+                                            "request_id": "confirm-1",
+                                            "model": "openai/gpt-4o-mini",
+                                            "reasoning_effort": "off",
+                                        }
+                                    )
+                                    turn_started = ws.receive_json()
+                                    task_list = ws.receive_json()
+                                    final_answer = ws.receive_json()
+
+            context = contexts[-1]
+            record = context.session_store.get_session(ready["session_id"])
+            events = context.session_store.load_events(record.session_id)
+
+            self.assertEqual(pending["type"], "plan_pending")
+            self.assertEqual(pending["items"], plan_items)
+            self.assertEqual(turn_started["type"], "turn_started")
+            self.assertEqual(task_list["type"], "task_list")
+            self.assertEqual(task_list["items"], plan_items)
+            self.assertEqual(task_list["source"], "plan_confirmed")
+            self.assertEqual(task_list["plan_id"], pending["plan_id"])
+            self.assertEqual(final_answer["type"], "final_answer")
+            self.assertEqual(final_answer["content"], "done: 实现 Plan Mode")
+            self.assertEqual(
+                [event.type for event in events],
+                [
+                    "session_started",
+                    "plan_confirmed",
+                    "user_message",
+                    "turn_started",
+                    "task_list",
+                    "assistant_message",
+                    "final_answer",
+                ],
+            )
+            self.assertEqual(events[1].payload["plan_id"], pending["plan_id"])
+            self.assertEqual(events[2].payload["accepted_plan"]["items"], plan_items)
+
 
 if __name__ == "__main__":
     unittest.main()

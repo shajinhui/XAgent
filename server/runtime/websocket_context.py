@@ -55,6 +55,7 @@ class WebSocketRuntimeContext:
     permission_mode: PermissionMode = PermissionMode.REQUEST_APPROVAL
     session_persisted: bool = False
     last_diff_tracker: Any = None  # 保存最后一次 turn 的 diff_tracker
+    pending_plan: Dict[str, Any] | None = None
 
     @property
     def messages(self) -> List[Dict[str, Any]]:
@@ -105,6 +106,7 @@ class WebSocketRuntimeContext:
             create_websocket_session(self.workspace, self.system_prompt)
         )
         self.session_persisted = False
+        self.pending_plan = None
         return previous_state
 
     def switch_workspace(self, path: str) -> tuple[Dict[str, Any], Dict[str, Any]]:
@@ -120,6 +122,7 @@ class WebSocketRuntimeContext:
             create_websocket_session(self.workspace, self.system_prompt)
         )
         self.session_persisted = False
+        self.pending_plan = None
         return previous_workspace, previous_state
 
     def change_directory(self, path: str) -> Dict[str, Any]:
@@ -249,6 +252,7 @@ class WebSocketRuntimeContext:
         self.session_id = session_id
         self.session_state = recover_session_runtime_state(session_id, target_events)
         self.registry = build_default_registry()
+        self.pending_plan = None
         project_policy = self.workspace.project_policy or default_project_policy()
         session_allow_rules = recover_session_allow_rules(
             target_events,

@@ -794,6 +794,7 @@ final_answer
 - `list_files`、`file_search`、`run_tests`、`update_plan` 和 `create_task_list` 已进入默认工具目录。
 - `run_tests` 已走 command executor、filesystem policy、network policy 和 sandbox mode，不再直接 `subprocess.run`。
 - `update_plan` / `create_task_list` 已标记为写 runtime task state 的 mutating 工具，默认需要审批。
+- WebSocket `plan_request -> plan_pending` 和 `plan_confirm -> task_list -> final_answer` 第一版有测试覆盖。
 - 读取 `/etc/passwd` 会被路径越界策略拦截。
 - 执行 `rm -rf /` 会被危险命令策略拦截。
 - 非白名单命令会返回 `permission_action=ask`。
@@ -844,6 +845,7 @@ final_answer
 - `.env` read/write 保护和 `.codex-mini` write 保护。
 - 基于首条用户提问的 conversation title 生成。
 - user turn 进入模型前的 `task_list` 生成和前端事件。
+- `plan_request` / `plan_confirm` / `plan_cancel` runtime first slice：支持先生成待确认计划，确认后复用普通 `user_input` 执行路径。
 - `edit_file` dry-run 预览。
 - `list_files` 文件枚举、`file_search` 文件名模糊搜索、`run_tests` 测试摘要工具。
 - `update_plan` / `create_task_list` 轻量任务追踪工具。
@@ -862,6 +864,7 @@ final_answer
 - 权限系统已有 `allow/deny/ask` 决策、统一 filesystem policy、prefix exec policy、runtime permission mode 和 policy-driven Seatbelt 第一版，但还不是完整可编辑 project policy。
 - session transcript 可以恢复模型上下文和持久挂起状态，但更完整的 checkpoint/restore 还未产品化。
 - `run_tests` 已接入 sandbox/permission 边界，但测试框架识别和失败解析仍是第一版启发式实现。
+- Plan Mode 目前完成后端协议和桌面 store plumbing，仍缺完整计划审阅 UI、计划编辑和执行约束。
 - 桌面客户端已有 runtime shell，但还需要 smoke test、交互 polish 和错误状态收口。
 
 ### 未完成

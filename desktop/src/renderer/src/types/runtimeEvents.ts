@@ -174,6 +174,24 @@ export type TaskListEvent = RuntimeEventBase & {
   type: 'task_list'
   items: RuntimeTaskListItem[]
   model: string
+  source?: 'auto' | 'plan_confirmed' | string
+  plan_id?: string | null
+}
+
+export type PlanPendingEvent = RuntimeEventBase & {
+  type: 'plan_pending'
+  plan_id: string
+  content: string
+  items: RuntimeTaskListItem[]
+  model: string
+  created_at: number
+  session_state: RuntimeSessionState
+}
+
+export type PlanCancelledEvent = RuntimeEventBase & {
+  type: 'plan_cancelled'
+  plan_id: string
+  session_state: RuntimeSessionState
 }
 
 export type SessionCreatedEvent = RuntimeEventBase & {
@@ -325,6 +343,8 @@ export type RuntimeEvent =
   | ReadyEvent
   | TurnStartedEvent
   | TaskListEvent
+  | PlanPendingEvent
+  | PlanCancelledEvent
   | SessionCreatedEvent
   | WorkspaceChangedEvent
   | WorkspacePolicyChangedEvent
@@ -349,6 +369,26 @@ export type RuntimeClientPacket =
       content: string
       model?: string
       reasoning_effort?: RuntimeReasoningEffort
+      turn_id?: string
+    }
+  | {
+      type: 'plan_request'
+      content: string
+      request_id?: string
+      turn_id?: string
+    }
+  | {
+      type: 'plan_confirm'
+      plan_id?: string
+      request_id?: string
+      turn_id?: string
+      model?: string
+      reasoning_effort?: RuntimeReasoningEffort
+    }
+  | {
+      type: 'plan_cancel'
+      plan_id?: string
+      request_id?: string
       turn_id?: string
     }
   | {

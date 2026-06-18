@@ -224,6 +224,15 @@ if app is not None:
                     )
                     continue
 
+                accepted_plan = packet.get("_accepted_plan")
+                if not isinstance(accepted_plan, dict):
+                    accepted_plan = None
+                if accepted_plan:
+                    context.pending_plan = None
+                elif context.pending_plan:
+                    # 用户绕过挂起计划直接发普通消息时，旧计划不再适用于当前 turn。
+                    context.pending_plan = None
+
                 model_config = build_model_request_config(packet)
                 if not context.session_persisted:
                     # 首条非空用户输入到达时才持久化，避免打开应用或新建空会话污染历史。
@@ -254,15 +263,36 @@ if app is not None:
                     user_input=user_text,
                     model_config=model_config,
                 )
+                if accepted_plan:
+                    record_transcript_event(
+                        context.session_store,
+                        context.session_id,
+                        "plan_confirmed",
+                        {
+                            "turn_id": turn_id,
+                            "request_id": packet.get("_plan_request_id") or packet.get("request_id"),
+                            "plan_id": accepted_plan.get("plan_id"),
+                            "content": accepted_plan.get("content"),
+                            "items": accepted_plan.get("items") or [],
+                            "model": accepted_plan.get("model"),
+                        },
+                    )
+                user_message_payload = {
+                    "turn_id": turn_id,
+                    "content": user_text,
+                    "model_config": model_config.as_dict(),
+                }
+                if accepted_plan:
+                    user_message_payload["accepted_plan"] = {
+                        "plan_id": accepted_plan.get("plan_id"),
+                        "items": accepted_plan.get("items") or [],
+                        "model": accepted_plan.get("model"),
+                    }
                 record_transcript_event(
                     context.session_store,
                     context.session_id,
                     "user_message",
-                    {
-                        "turn_id": turn_id,
-                        "content": user_text,
-                        "model_config": model_config.as_dict(),
-                    },
+                    user_message_payload,
                 )
                 record_transcript_event(
                     context.session_store,
@@ -283,11 +313,19 @@ if app is not None:
                         model_config=model_config.as_dict(),
                     )
                 )
-                try:
-                    task_list, task_list_model = generate_task_list(user_text)
-                except Exception as exc:
-                    task_list = fallback_task_list(user_text)
-                    task_list_model = f"fallback:{type(exc).__name__}"
+                task_list_plan_id = None
+                task_list_source = "auto"
+                if accepted_plan:
+                    task_list = accepted_plan.get("items") or []
+                    task_list_model = str(accepted_plan.get("model") or "plan-confirmed")
+                    task_list_plan_id = accepted_plan.get("plan_id")
+                    task_list_source = "plan_confirmed"
+                else:
+                    try:
+                        task_list, task_list_model = generate_task_list(user_text)
+                    except Exception as exc:
+                        task_list = fallback_task_list(user_text)
+                        task_list_model = f"fallback:{type(exc).__name__}"
 
                 record_transcript_event(
                     context.session_store,
@@ -297,6 +335,8 @@ if app is not None:
                         "turn_id": turn_id,
                         "items": task_list,
                         "model": task_list_model,
+                        "source": task_list_source,
+                        "plan_id": task_list_plan_id,
                     },
                 )
                 await ws.send_json(
@@ -306,6 +346,8 @@ if app is not None:
                         turn_id,
                         items=task_list,
                         model=task_list_model,
+                        source=task_list_source,
+                        plan_id=task_list_plan_id,
                     )
                 )
 

@@ -918,6 +918,63 @@ class WebSocketRequestDispatcherTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(KeyError):
                 context.session_store.get_session(context.session_id)
 
+    async def test_plan_request_creates_pending_plan_without_persisting_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            context = WebSocketRuntimeContext.create(Path(tmp), "system")
+            ws = FakeWebSocket()
+            dispatcher = WebSocketRequestDispatcher(ws, context)
+
+            plan_items = [
+                {"step": "分析需求", "status": "in_progress"},
+                {"step": "实现改动", "status": "pending"},
+            ]
+            with patch(
+                "server.processors.request_dispatcher.generate_task_list",
+                return_value=(plan_items, "test-plan-model"),
+            ):
+                handled = await dispatcher.handle_control_packet(
+                    {
+                        "type": "plan_request",
+                        "content": "实现 Plan Mode",
+                        "request_id": "plan-1",
+                    }
+                )
+
+            self.assertTrue(handled)
+            self.assertIsNotNone(context.pending_plan)
+            self.assertEqual(context.pending_plan["content"], "实现 Plan Mode")
+            self.assertEqual(ws.sent[0]["type"], "plan_pending")
+            self.assertEqual(ws.sent[0]["items"], plan_items)
+            self.assertEqual(ws.sent[0]["model"], "test-plan-model")
+            with self.assertRaises(KeyError):
+                context.session_store.get_session(context.session_id)
+
+    async def test_plan_cancel_clears_pending_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            context = WebSocketRuntimeContext.create(Path(tmp), "system")
+            context.pending_plan = {
+                "plan_id": "plan-123",
+                "content": "实现 Plan Mode",
+                "items": [{"step": "分析需求", "status": "in_progress"}],
+                "model": "test-plan-model",
+                "created_at": 1.0,
+            }
+            ws = FakeWebSocket()
+            dispatcher = WebSocketRequestDispatcher(ws, context)
+
+            handled = await dispatcher.handle_control_packet(
+                {
+                    "type": "plan_cancel",
+                    "plan_id": "plan-123",
+                    "request_id": "cancel-1",
+                }
+            )
+
+            self.assertTrue(handled)
+            self.assertIsNone(context.pending_plan)
+            self.assertEqual(ws.sent[0]["type"], "plan_cancelled")
+            self.assertEqual(ws.sent[0]["plan_id"], "plan-123")
+
     async def test_resume_without_target_clears_suspended_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             context = WebSocketRuntimeContext.create(Path(tmp), "system")

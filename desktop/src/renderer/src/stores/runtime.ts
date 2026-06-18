@@ -6,6 +6,7 @@ import type {
   ClarificationRequestEvent,
   ClarificationResponsePayload,
   PermissionRequestEvent,
+  PlanPendingEvent,
   RuntimeEvent,
   RuntimeModelConfig,
   RuntimePermissionMode,
@@ -495,6 +496,7 @@ export const useRuntimeStore = defineStore('runtime', {
     sessionState: null as RuntimeSessionState | null,
     activePermission: null as PermissionRequestEvent | null,
     activeClarification: null as ClarificationRequestEvent | null,
+    pendingPlan: null as PlanPendingEvent | null,
     sessionHistory: [] as RuntimeSessionSummary[],
     sessionsLoading: false,
     selectedSessionId: '',
@@ -955,6 +957,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.activeTurnId = ''
       this.activePermission = null
       this.activeClarification = null
+      this.pendingPlan = null
       this.errorMessage = ''
 
       if (!runtimeSocket?.isOpen) {
@@ -1183,6 +1186,37 @@ export const useRuntimeStore = defineStore('runtime', {
       })
     },
 
+    requestPlan(content: string): void {
+      const cleanContent = content.trim()
+      if (!runtimeSocket?.isOpen || !cleanContent) return
+
+      runtimeSocket.send({
+        type: 'plan_request',
+        request_id: `plan-${Date.now()}`,
+        content: cleanContent
+      })
+    },
+
+    confirmPlan(planId?: string): void {
+      if (!runtimeSocket?.isOpen) return
+
+      runtimeSocket.send({
+        type: 'plan_confirm',
+        request_id: `plan-confirm-${Date.now()}`,
+        plan_id: planId
+      })
+    },
+
+    cancelPlan(planId?: string): void {
+      if (!runtimeSocket?.isOpen) return
+
+      runtimeSocket.send({
+        type: 'plan_cancel',
+        request_id: `plan-cancel-${Date.now()}`,
+        plan_id: planId
+      })
+    },
+
     sendClarificationResponse(payload: ClarificationResponsePayload): void {
       if (!this.activeClarification || !runtimeSocket?.isOpen) return
 
@@ -1263,6 +1297,7 @@ export const useRuntimeStore = defineStore('runtime', {
           this.activeTurnId = ''
           this.activePermission = null
           this.activeClarification = null
+          this.pendingPlan = null
           this.sessionHistory =
             this.sessionsBySelectedRoot[normalizeSelectedRoot(event.workspace.selected_root)] || []
           chat.resetConversation()
@@ -1318,7 +1353,20 @@ export const useRuntimeStore = defineStore('runtime', {
         case 'turn_started':
           this.activeTurnId = event.turn_id
           this.sessionState = event.session_state
+          this.pendingPlan = null
           chat.startActivity(event.turn_id)
+          break
+        case 'plan_pending':
+          this.sessionState = event.session_state
+          this.pendingPlan = event
+          chat.addSystemMessage(`计划已生成：${event.items.length} 个步骤，等待确认。`)
+          break
+        case 'plan_cancelled':
+          this.sessionState = event.session_state
+          if (!this.pendingPlan || this.pendingPlan.plan_id === event.plan_id) {
+            this.pendingPlan = null
+          }
+          chat.addSystemMessage('计划已取消。')
           break
         case 'task_list':
           chat.setActiveTaskList(event.items || [], event.turn_id || this.activeTurnId)
@@ -1342,6 +1390,7 @@ export const useRuntimeStore = defineStore('runtime', {
           this.activeTurnId = ''
           this.activePermission = null
           this.activeClarification = null
+          this.pendingPlan = null
           chat.resetConversation()
           this.syncGlobalPermissionMode()
           this.requestSessions()
@@ -1385,6 +1434,7 @@ export const useRuntimeStore = defineStore('runtime', {
             this.activeTurnId = ''
             this.activePermission = null
             this.activeClarification = null
+            this.pendingPlan = null
             chat.resetConversation()
           } else if (this.selectedSessionId === event.deleted_session_id) {
             this.setSelectedSession(this.sessionId, this.getActiveWorkspaceRoot())
@@ -1526,6 +1576,7 @@ export const useRuntimeStore = defineStore('runtime', {
           }
           this.setSelectedSession(event.session_id || this.sessionId, this.getActiveWorkspaceRoot())
           this.activeClarification = null
+          this.pendingPlan = null
           if (event.resumed_from_disk) {
             chat.loadConversation(event.messages || [], event.session?.title || '历史会话')
           } else {

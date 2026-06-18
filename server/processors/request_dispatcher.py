@@ -8,10 +8,12 @@ WebSocket 控制请求分发器。
 from __future__ import annotations
 
 import uuid
+import time
 from typing import Any, Dict
 
 from memory.store import MemoryStore
 from memory.summarizer import extract_task_state, summarize_session
+from server.processors.task_list_processor import fallback_task_list, generate_task_list
 from server.processors.title_processor import generate_conversation_title, normalize_title_messages
 from server.protocol.events import build_event
 from server.runtime.transcript_events import record_transcript_event
@@ -79,6 +81,14 @@ class WebSocketRequestDispatcher:
             return True
         if packet_type == "set_permission_mode":
             await self._handle_permission_mode_change(packet)
+            return True
+        if packet_type == "plan_request":
+            await self._handle_plan_request(packet)
+            return True
+        if packet_type == "plan_confirm":
+            return await self._handle_plan_confirm(packet)
+        if packet_type == "plan_cancel":
+            await self._handle_plan_cancel(packet)
             return True
         if packet_type == "new_session":
             await self._handle_new_session(packet)
@@ -351,6 +361,137 @@ class WebSocketRequestDispatcher:
             previous_workspace=previous_workspace,
             reason="set_permission_mode",
             permission_mode=mode.value,
+        )
+
+    async def _handle_plan_request(self, packet: Dict[str, Any]) -> None:
+        """生成待确认计划；不进入模型回合，也不创建空 session。"""
+
+        request_id = _request_id(packet)
+        content = str(packet.get("content") or packet.get("goal") or "").strip()
+        if not content:
+            await self._send_error(
+                packet,
+                request_id=request_id,
+                message="plan content is empty",
+            )
+            return
+
+        try:
+            items, model = generate_task_list(content)
+        except Exception as exc:
+            items = fallback_task_list(content)
+            model = f"fallback:{type(exc).__name__}"
+
+        plan = {
+            "plan_id": str(uuid.uuid4()),
+            "content": content,
+            "items": items,
+            "model": model,
+            "created_at": time.time(),
+        }
+        self.context.pending_plan = plan
+
+        if self.context.session_persisted:
+            record_transcript_event(
+                self.context.session_store,
+                self.context.session_id,
+                "plan_pending",
+                {
+                    "turn_id": _turn_id(packet, "plan"),
+                    "request_id": request_id,
+                    **plan,
+                },
+            )
+
+        await self.ws.send_json(
+            build_event(
+                "plan_pending",
+                self.context.session_id,
+                _turn_id(packet, "plan"),
+                request_id=request_id,
+                session_state=self.context.session_state.as_dict(),
+                **plan,
+            )
+        )
+
+    async def _handle_plan_confirm(self, packet: Dict[str, Any]) -> bool:
+        """确认挂起计划，并把 packet 转成 user_input 交回 WebSocket 主循环。"""
+
+        request_id = _request_id(packet)
+        pending_plan = self.context.pending_plan
+        if not pending_plan:
+            await self._send_error(
+                packet,
+                request_id=request_id,
+                message="no pending plan to confirm",
+            )
+            return True
+
+        requested_plan_id = str(packet.get("plan_id") or "").strip()
+        if requested_plan_id and requested_plan_id != pending_plan["plan_id"]:
+            await self._send_error(
+                packet,
+                request_id=request_id,
+                message="pending plan id mismatch",
+                requested_plan_id=requested_plan_id,
+                pending_plan_id=pending_plan["plan_id"],
+            )
+            return True
+
+        # 这里故意不直接运行 turn runner；把 packet 改成 user_input 后交回 app.py，
+        # 继续复用现有持久化、session_busy、取消和 final_answer 收口路径。
+        packet["type"] = "user_input"
+        packet["content"] = pending_plan["content"]
+        packet["_accepted_plan"] = pending_plan
+        packet["_plan_request_id"] = request_id
+        return False
+
+    async def _handle_plan_cancel(self, packet: Dict[str, Any]) -> None:
+        """取消挂起计划；不会进入模型回合。"""
+
+        request_id = _request_id(packet)
+        pending_plan = self.context.pending_plan
+        if not pending_plan:
+            await self._send_error(
+                packet,
+                request_id=request_id,
+                message="no pending plan to cancel",
+            )
+            return
+
+        requested_plan_id = str(packet.get("plan_id") or "").strip()
+        if requested_plan_id and requested_plan_id != pending_plan["plan_id"]:
+            await self._send_error(
+                packet,
+                request_id=request_id,
+                message="pending plan id mismatch",
+                requested_plan_id=requested_plan_id,
+                pending_plan_id=pending_plan["plan_id"],
+            )
+            return
+
+        self.context.pending_plan = None
+        if self.context.session_persisted:
+            record_transcript_event(
+                self.context.session_store,
+                self.context.session_id,
+                "plan_cancelled",
+                {
+                    "turn_id": _turn_id(packet, "plan"),
+                    "request_id": request_id,
+                    "plan_id": pending_plan["plan_id"],
+                },
+            )
+
+        await self.ws.send_json(
+            build_event(
+                "plan_cancelled",
+                self.context.session_id,
+                _turn_id(packet, "plan"),
+                request_id=request_id,
+                plan_id=pending_plan["plan_id"],
+                session_state=self.context.session_state.as_dict(),
+            )
         )
 
     async def _handle_new_session(self, packet: Dict[str, Any]) -> None:
