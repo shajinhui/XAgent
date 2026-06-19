@@ -17,7 +17,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   send: [content: string]
   plan: [content: string]
-  'update:planMode': [enabled: boolean]
+  'update:plan-mode': [enabled: boolean]
   'update:model': [model: string]
   'update:reasoningEffort': [effort: string]
   'update:permissionMode': [mode: RuntimePermissionMode]
@@ -144,7 +144,7 @@ function sendMessage(): void {
 
 function togglePlanMode(): void {
   if (props.disabled || isSubmitting.value) return
-  emit('update:planMode', !props.planModeEnabled)
+  emit('update:plan-mode', !props.planModeEnabled)
 }
 
 function handleEnter(event: KeyboardEvent): void {
