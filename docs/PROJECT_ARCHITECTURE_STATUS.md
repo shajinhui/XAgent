@@ -845,7 +845,7 @@ final_answer
 - `.env` read/write 保护和 `.codex-mini` write 保护。
 - 基于首条用户提问的 conversation title 生成。
 - user turn 进入模型前的 `task_list` 生成和前端事件。
-- `plan_request` / `plan_confirm` / `plan_cancel` runtime first slice：支持先生成待确认计划，确认后复用普通 `user_input` 执行路径；桌面端已有计划入口和轻量审阅确认卡片，已确认计划会注入模型执行上下文并参与 session recovery。
+- `plan_request` / `plan_confirm` / `plan_cancel` runtime first slice：支持先生成待确认计划，确认后复用普通 `user_input` 执行路径；桌面端已有持久化计划模式开关和轻量审阅确认卡片，已确认计划会注入模型执行上下文并参与 session recovery。
 - `edit_file` dry-run 预览。
 - `list_files` 文件枚举、`file_search` 文件名模糊搜索、`run_tests` 测试摘要工具。
 - `update_plan` / `create_task_list` 轻量任务追踪工具。

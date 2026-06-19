@@ -28,6 +28,7 @@ const WORKSPACE_PROJECTS_STORAGE_KEY = 'codex-mini.workspace-projects'
 const WORKSPACE_SESSIONS_STORAGE_KEY = 'codex-mini.workspace-sessions'
 const CONVERSATION_WORKSPACES_STORAGE_KEY = 'codex-mini.conversation-workspaces'
 const PERMISSION_MODE_STORAGE_KEY = 'codex-mini.permission-mode'
+const PLAN_MODE_STORAGE_KEY = 'codex-mini.plan-mode'
 const MAX_WORKSPACE_PROJECTS = 20
 const MAX_CONVERSATION_WORKSPACES = 12
 const FALLBACK_MODEL_OPTIONS = ['gpt-4o-mini']
@@ -267,6 +268,14 @@ function saveGlobalPermissionMode(mode: RuntimePermissionMode): void {
   window.localStorage.setItem(PERMISSION_MODE_STORAGE_KEY, mode)
 }
 
+function loadPlanModeEnabled(): boolean {
+  return window.localStorage.getItem(PLAN_MODE_STORAGE_KEY) === 'true'
+}
+
+function savePlanModeEnabled(enabled: boolean): void {
+  window.localStorage.setItem(PLAN_MODE_STORAGE_KEY, enabled ? 'true' : 'false')
+}
+
 function clearReconnectTimer(): void {
   if (!reconnectTimer) return
 
@@ -499,6 +508,7 @@ export const useRuntimeStore = defineStore('runtime', {
     pendingPlan: null as PlanPendingEvent | null,
     planRequestInFlight: false,
     pendingPlanRequestId: '',
+    planModeEnabled: loadPlanModeEnabled(),
     sessionHistory: [] as RuntimeSessionSummary[],
     sessionsLoading: false,
     selectedSessionId: '',
@@ -592,6 +602,11 @@ export const useRuntimeStore = defineStore('runtime', {
       const normalized = normalizeReasoningEffort(effort)
       if (!normalized || !this.reasoningEffortOptions.includes(normalized)) return
       this.reasoningEffort = normalized
+    },
+
+    setPlanModeEnabled(enabled: boolean): void {
+      this.planModeEnabled = enabled
+      savePlanModeEnabled(enabled)
     },
 
     async connect(options: { silent?: boolean } = {}): Promise<void> {
@@ -1213,6 +1228,8 @@ export const useRuntimeStore = defineStore('runtime', {
         return
       }
 
+      chat.addUserMessage(cleanContent)
+      chat.setFallbackConversationTitle()
       chat.addSystemMessage('正在生成计划...')
 
       runtimeSocket.send({

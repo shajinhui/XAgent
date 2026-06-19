@@ -12,11 +12,13 @@ const props = defineProps<{
   reasoningEffort: string
   reasoningOptions: string[]
   permissionMode: RuntimePermissionMode
+  planModeEnabled: boolean
 }>()
 
 const emit = defineEmits<{
   send: [content: string]
   plan: [content: string]
+  'update:planMode': [enabled: boolean]
   'update:model': [model: string]
   'update:reasoningEffort': [effort: string]
   'update:permissionMode': [mode: RuntimePermissionMode]
@@ -123,23 +125,17 @@ function sendMessage(): void {
 
   isSubmitting.value = true
   clearDraft()
-  emit('send', text)
+  if (props.planModeEnabled) {
+    emit('plan', text)
+  } else {
+    emit('send', text)
+  }
   unlockSubmitSoon()
 }
 
-function requestPlan(): void {
+function togglePlanMode(): void {
   if (props.disabled || isSubmitting.value) return
-
-  const text = draft.value.trim()
-  if (!text) {
-    clearDraft()
-    return
-  }
-
-  isSubmitting.value = true
-  clearDraft()
-  emit('plan', text)
-  unlockSubmitSoon()
+  emit('update:planMode', !props.planModeEnabled)
 }
 
 function handleEnter(event: KeyboardEvent): void {
@@ -179,13 +175,15 @@ onBeforeUnmount(() => {
         </IconButton>
         <button
           class="plan-button"
+          :class="{ active: planModeEnabled }"
           type="button"
-          aria-label="生成计划"
+          aria-label="切换计划模式"
+          :aria-pressed="planModeEnabled"
           :disabled="disabled || isSubmitting"
-          @click="requestPlan"
+          @click="togglePlanMode"
         >
           <ListChecks />
-          <span>计划</span>
+          <span>{{ planModeEnabled ? '计划模式' : '计划' }}</span>
         </button>
         <div class="permission-mode-control">
           <button
