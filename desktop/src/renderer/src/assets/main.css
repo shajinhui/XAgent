@@ -2331,15 +2331,6 @@ textarea:disabled {
   background: var(--surface-hover);
 }
 
-.composer-plus-button.active {
-  color: var(--text-on-primary);
-  background: var(--accent-strong);
-}
-
-.composer-plus-button.active:hover {
-  background: var(--accent-hover);
-}
-
 .composer-plus-button:disabled {
   color: var(--text-disabled);
   cursor: not-allowed;
@@ -2421,7 +2412,7 @@ textarea:disabled {
 }
 
 .composer-switch.active {
-  background: var(--accent-strong);
+  background: var(--text-muted-strong);
 }
 
 .composer-switch.active span {

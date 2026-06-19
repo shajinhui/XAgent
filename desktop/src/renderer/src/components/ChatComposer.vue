@@ -182,7 +182,6 @@ onBeforeUnmount(() => {
         <div class="composer-tool-control">
           <button
             class="composer-plus-button"
-            :class="{ active: planModeEnabled }"
             type="button"
             aria-label="打开工具菜单"
             :aria-expanded="toolMenuOpen"
