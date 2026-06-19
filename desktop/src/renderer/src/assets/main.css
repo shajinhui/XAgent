@@ -2366,6 +2366,7 @@ textarea:disabled {
 }
 
 .composer-tool-option {
+  position: relative;
   width: 100%;
   min-width: 0;
   display: flex;
@@ -2409,6 +2410,17 @@ textarea:disabled {
   padding: 2px;
   background: var(--surface-selected-strong);
   transition: background 0.16s ease;
+}
+
+.composer-switch-input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.composer-switch-input:disabled {
+  cursor: not-allowed;
 }
 
 .composer-switch span {
