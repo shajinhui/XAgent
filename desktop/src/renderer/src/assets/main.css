@@ -2310,46 +2310,122 @@ textarea:disabled {
   gap: 10px;
 }
 
+.composer-tool-control,
 .permission-mode-control {
   position: relative;
 }
 
-.plan-button {
+.composer-plus-button {
+  width: 34px;
   height: 34px;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
+  display: inline-grid;
+  place-items: center;
   border: 0;
-  border-radius: 999px;
-  padding: 0 10px;
-  color: var(--accent);
+  border-radius: 12px;
+  color: var(--text-secondary);
   background: transparent;
-  font-size: 13px;
-  font-weight: 700;
   cursor: pointer;
 }
 
-.plan-button:hover {
+.composer-plus-button:hover {
   background: var(--surface-hover);
 }
 
-.plan-button.active {
+.composer-plus-button.active {
   color: var(--text-on-primary);
   background: var(--accent-strong);
 }
 
-.plan-button.active:hover {
+.composer-plus-button.active:hover {
   background: var(--accent-hover);
 }
 
-.plan-button:disabled {
+.composer-plus-button:disabled {
   color: var(--text-disabled);
   cursor: not-allowed;
 }
 
-.plan-button svg {
-  width: 18px;
-  height: 18px;
+.composer-plus-button svg {
+  width: 22px;
+  height: 22px;
+  stroke-width: 1.9;
+}
+
+.composer-tool-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 12px);
+  z-index: 20;
+  width: min(260px, calc(100vw - 48px));
+  display: grid;
+  border: 1px solid var(--border-strong);
+  border-radius: 18px;
+  padding: 8px;
+  background: var(--panel-elevated-bg);
+  box-shadow: 0 22px 70px var(--shadow-menu);
+}
+
+.composer-tool-option {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border: 0;
+  border-radius: 12px;
+  padding: 10px 12px;
+  color: var(--text-primary);
+  background: transparent;
+  font-size: 15px;
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.composer-tool-option:hover {
+  background: var(--surface-hover);
+}
+
+.composer-tool-option-main {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.composer-tool-option-main svg {
+  width: 19px;
+  height: 19px;
+  color: var(--text-secondary);
+}
+
+.composer-switch {
+  width: 44px;
+  height: 26px;
+  flex: 0 0 44px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px;
+  background: var(--surface-selected-strong);
+  transition: background 0.16s ease;
+}
+
+.composer-switch span {
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--text-selected);
+  box-shadow: 0 1px 4px var(--shadow-panel);
+  transition: transform 0.16s ease;
+}
+
+.composer-switch.active {
+  background: var(--accent-strong);
+}
+
+.composer-switch.active span {
+  transform: translateX(18px);
 }
 
 .permission-mode-trigger {

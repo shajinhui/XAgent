@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { ChevronDown, ListChecks, Paperclip, SendHorizontal, Shield } from '@lucide/vue'
-import IconButton from '@renderer/components/ui/IconButton.vue'
+import { ChevronDown, ListChecks, Plus, SendHorizontal, Shield } from '@lucide/vue'
 import type { RuntimePermissionMode } from '@renderer/types/runtimeEvents'
 
 const props = defineProps<{
@@ -27,6 +26,7 @@ const emit = defineEmits<{
 const draft = ref('')
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const isSubmitting = ref(false)
+const toolMenuOpen = ref(false)
 const permissionMenuOpen = ref(false)
 let submitUnlockTimer: number | null = null
 
@@ -86,6 +86,7 @@ function formatReasoningLabel(effort: string): string {
 
 function togglePermissionMenu(): void {
   if (props.disabled) return
+  toolMenuOpen.value = false
   permissionMenuOpen.value = !permissionMenuOpen.value
 }
 
@@ -114,6 +115,12 @@ function unlockSubmitSoon(): void {
   }, 250)
 }
 
+function toggleToolMenu(): void {
+  if (props.disabled) return
+  permissionMenuOpen.value = false
+  toolMenuOpen.value = !toolMenuOpen.value
+}
+
 function sendMessage(): void {
   if (props.disabled || isSubmitting.value) return
 
@@ -124,6 +131,8 @@ function sendMessage(): void {
   }
 
   isSubmitting.value = true
+  toolMenuOpen.value = false
+  permissionMenuOpen.value = false
   clearDraft()
   if (props.planModeEnabled) {
     emit('plan', text)
@@ -136,6 +145,7 @@ function sendMessage(): void {
 function togglePlanMode(): void {
   if (props.disabled || isSubmitting.value) return
   emit('update:planMode', !props.planModeEnabled)
+  toolMenuOpen.value = false
 }
 
 function handleEnter(event: KeyboardEvent): void {
@@ -170,21 +180,36 @@ onBeforeUnmount(() => {
 
     <div class="composer-actions">
       <div class="left-tools">
-        <IconButton label="添加附件" variant="soft">
-          <Paperclip />
-        </IconButton>
-        <button
-          class="plan-button"
-          :class="{ active: planModeEnabled }"
-          type="button"
-          aria-label="切换计划模式"
-          :aria-pressed="planModeEnabled"
-          :disabled="disabled || isSubmitting"
-          @click="togglePlanMode"
-        >
-          <ListChecks />
-          <span>{{ planModeEnabled ? '计划模式' : '计划' }}</span>
-        </button>
+        <div class="composer-tool-control">
+          <button
+            class="composer-plus-button"
+            :class="{ active: planModeEnabled }"
+            type="button"
+            aria-label="打开工具菜单"
+            :aria-expanded="toolMenuOpen"
+            :disabled="disabled || isSubmitting"
+            @click="toggleToolMenu"
+          >
+            <Plus />
+          </button>
+          <div v-if="toolMenuOpen" class="composer-tool-menu">
+            <button
+              class="composer-tool-option"
+              type="button"
+              role="switch"
+              :aria-checked="planModeEnabled"
+              @click="togglePlanMode"
+            >
+              <span class="composer-tool-option-main">
+                <ListChecks />
+                <span>计划模式</span>
+              </span>
+              <span class="composer-switch" :class="{ active: planModeEnabled }">
+                <span></span>
+              </span>
+            </button>
+          </div>
+        </div>
         <div class="permission-mode-control">
           <button
             class="permission-mode-trigger"
