@@ -133,6 +133,7 @@ const conversationSessionKeys = computed(
 const composerPlaceholder = computed(() => {
   if (runtime.isSuspended) return '会话已挂起，请先恢复...'
   if (runtime.isConnecting) return '正在连接后端...'
+  if (runtime.planRequestInFlight) return '正在生成计划...'
   if (runtime.pendingPlan) return '计划待确认...'
   return '输入消息...'
 })
@@ -141,6 +142,7 @@ const composerDisabled = computed(
   () =>
     runtime.isConnecting ||
     runtime.isSuspended ||
+    runtime.planRequestInFlight ||
     Boolean(runtime.activeTurnId) ||
     Boolean(runtime.pendingPlan)
 )
@@ -781,7 +783,7 @@ onBeforeUnmount(() => {
             :reasoning-options="runtime.reasoningEffortOptions"
             :permission-mode="runtime.permissionMode"
             @send="runtime.sendUserInput"
-            @plan="runtime.requestPlan"
+            @plan="(content) => void runtime.requestPlan(content)"
             @update:model="runtime.setSelectedModel"
             @update:reasoning-effort="runtime.setReasoningEffort"
             @update:permission-mode="runtime.setPermissionMode"

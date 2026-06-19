@@ -497,6 +497,8 @@ export const useRuntimeStore = defineStore('runtime', {
     activePermission: null as PermissionRequestEvent | null,
     activeClarification: null as ClarificationRequestEvent | null,
     pendingPlan: null as PlanPendingEvent | null,
+    planRequestInFlight: false,
+    pendingPlanRequestId: '',
     sessionHistory: [] as RuntimeSessionSummary[],
     sessionsLoading: false,
     selectedSessionId: '',
@@ -607,6 +609,8 @@ export const useRuntimeStore = defineStore('runtime', {
         },
         onClose: () => {
           this.connectionStatus = 'disconnected'
+          this.planRequestInFlight = false
+          this.pendingPlanRequestId = ''
           if (!manualDisconnect) {
             this.scheduleReconnect()
           }
@@ -614,6 +618,8 @@ export const useRuntimeStore = defineStore('runtime', {
         onError: (error) => {
           this.connectionStatus = 'error'
           this.errorMessage = error.message
+          this.planRequestInFlight = false
+          this.pendingPlanRequestId = ''
         },
         onEvent: (event) => this.handleEvent(event)
       })
@@ -958,6 +964,8 @@ export const useRuntimeStore = defineStore('runtime', {
       this.activePermission = null
       this.activeClarification = null
       this.pendingPlan = null
+      this.planRequestInFlight = false
+      this.pendingPlanRequestId = ''
       this.errorMessage = ''
 
       if (!runtimeSocket?.isOpen) {
@@ -1186,13 +1194,30 @@ export const useRuntimeStore = defineStore('runtime', {
       })
     },
 
-    requestPlan(content: string): void {
+    async requestPlan(content: string): Promise<void> {
       const cleanContent = content.trim()
-      if (!runtimeSocket?.isOpen || !cleanContent) return
+      if (!cleanContent || this.planRequestInFlight) return
+
+      const chat = useChatStore()
+      this.planRequestInFlight = true
+      this.pendingPlanRequestId = `plan-${Date.now()}`
+
+      if (!runtimeSocket?.isOpen) {
+        await this.connect({ silent: true })
+      }
+
+      if (!runtimeSocket?.isOpen) {
+        this.planRequestInFlight = false
+        this.pendingPlanRequestId = ''
+        chat.addSystemMessage('后端还没有连接，先启动 Python WebSocket 服务后再生成计划。')
+        return
+      }
+
+      chat.addSystemMessage('正在生成计划...')
 
       runtimeSocket.send({
         type: 'plan_request',
-        request_id: `plan-${Date.now()}`,
+        request_id: this.pendingPlanRequestId,
         content: cleanContent
       })
     },
@@ -1298,6 +1323,8 @@ export const useRuntimeStore = defineStore('runtime', {
           this.activePermission = null
           this.activeClarification = null
           this.pendingPlan = null
+          this.planRequestInFlight = false
+          this.pendingPlanRequestId = ''
           this.sessionHistory =
             this.sessionsBySelectedRoot[normalizeSelectedRoot(event.workspace.selected_root)] || []
           chat.resetConversation()
@@ -1354,11 +1381,15 @@ export const useRuntimeStore = defineStore('runtime', {
           this.activeTurnId = event.turn_id
           this.sessionState = event.session_state
           this.pendingPlan = null
+          this.planRequestInFlight = false
+          this.pendingPlanRequestId = ''
           chat.startActivity(event.turn_id)
           break
         case 'plan_pending':
           this.sessionState = event.session_state
           this.pendingPlan = event
+          this.planRequestInFlight = false
+          this.pendingPlanRequestId = ''
           chat.addSystemMessage(`计划已生成：${event.items.length} 个步骤，等待确认。`)
           break
         case 'plan_cancelled':
@@ -1366,6 +1397,8 @@ export const useRuntimeStore = defineStore('runtime', {
           if (!this.pendingPlan || this.pendingPlan.plan_id === event.plan_id) {
             this.pendingPlan = null
           }
+          this.planRequestInFlight = false
+          this.pendingPlanRequestId = ''
           chat.addSystemMessage('计划已取消。')
           break
         case 'task_list':
@@ -1391,6 +1424,8 @@ export const useRuntimeStore = defineStore('runtime', {
           this.activePermission = null
           this.activeClarification = null
           this.pendingPlan = null
+          this.planRequestInFlight = false
+          this.pendingPlanRequestId = ''
           chat.resetConversation()
           this.syncGlobalPermissionMode()
           this.requestSessions()
@@ -1435,6 +1470,8 @@ export const useRuntimeStore = defineStore('runtime', {
             this.activePermission = null
             this.activeClarification = null
             this.pendingPlan = null
+            this.planRequestInFlight = false
+            this.pendingPlanRequestId = ''
             chat.resetConversation()
           } else if (this.selectedSessionId === event.deleted_session_id) {
             this.setSelectedSession(this.sessionId, this.getActiveWorkspaceRoot())
@@ -1577,6 +1614,8 @@ export const useRuntimeStore = defineStore('runtime', {
           this.setSelectedSession(event.session_id || this.sessionId, this.getActiveWorkspaceRoot())
           this.activeClarification = null
           this.pendingPlan = null
+          this.planRequestInFlight = false
+          this.pendingPlanRequestId = ''
           if (event.resumed_from_disk) {
             chat.loadConversation(event.messages || [], event.session?.title || '历史会话')
           } else {
@@ -1605,6 +1644,14 @@ export const useRuntimeStore = defineStore('runtime', {
         case 'error':
         case 'workspace_error':
           this.errorMessage = event.message
+          if (
+            this.pendingPlanRequestId &&
+            event.request_id &&
+            event.request_id === this.pendingPlanRequestId
+          ) {
+            this.planRequestInFlight = false
+            this.pendingPlanRequestId = ''
+          }
           if (event.type === 'workspace_error') {
             if (
               this.pendingWorkspaceRequestId &&
