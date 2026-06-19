@@ -845,7 +845,7 @@ final_answer
 - `.env` read/write 保护和 `.codex-mini` write 保护。
 - 基于首条用户提问的 conversation title 生成。
 - user turn 进入模型前的 `task_list` 生成和前端事件。
-- `plan_request` / `plan_confirm` / `plan_cancel` runtime first slice：支持先生成待确认计划，确认后复用普通 `user_input` 执行路径；桌面端已有计划入口和轻量审阅确认卡片。
+- `plan_request` / `plan_confirm` / `plan_cancel` runtime first slice：支持先生成待确认计划，确认后复用普通 `user_input` 执行路径；桌面端已有计划入口和轻量审阅确认卡片，已确认计划会注入模型执行上下文并参与 session recovery。
 - `edit_file` dry-run 预览。
 - `list_files` 文件枚举、`file_search` 文件名模糊搜索、`run_tests` 测试摘要工具。
 - `update_plan` / `create_task_list` 轻量任务追踪工具。
@@ -864,7 +864,7 @@ final_answer
 - 权限系统已有 `allow/deny/ask` 决策、统一 filesystem policy、prefix exec policy、runtime permission mode 和 policy-driven Seatbelt 第一版，但还不是完整可编辑 project policy。
 - session transcript 可以恢复模型上下文和持久挂起状态，但更完整的 checkpoint/restore 还未产品化。
 - `run_tests` 已接入 sandbox/permission 边界，但测试框架识别和失败解析仍是第一版启发式实现。
-- Plan Mode 目前完成后端协议、桌面 store plumbing 和轻量计划审阅确认 UI，仍缺计划编辑和执行约束。
+- Plan Mode 目前完成后端协议、桌面 store plumbing、轻量计划审阅确认 UI 和确认计划的模型上下文约束，仍缺计划编辑和更严格的步骤级执行约束。
 - 桌面客户端已有 runtime shell，但还需要 smoke test、交互 polish 和错误状态收口。
 
 ### 未完成

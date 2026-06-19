@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, TypedDict
 from dotenv import load_dotenv
 from langgraph.graph import END, START, StateGraph
 
+from context_manager.plan_context import render_confirmed_plan_user_message
 from server.processors.request_dispatcher import WebSocketRequestDispatcher
 from server.processors.task_list_processor import fallback_task_list, generate_task_list
 from server.protocol.events import EVENT_SCHEMA_VERSION, build_event, parse_client_packet
@@ -246,7 +247,8 @@ if app is not None:
                 # 仍保留在内存中以兼容 DeepSeek 的工具调用后的上下文拼接要求。
                 turn_system_prompt = context.refresh_history_system_prompt()
                 context.history.clear_historical_reasoning_content()
-                context.history.append_user_message(user_text)
+                model_user_text = render_confirmed_plan_user_message(user_text, accepted_plan)
+                context.history.append_user_message(model_user_text)
                 turn_id = str(uuid.uuid4())
                 context.session_state.start_turn(turn_id)
                 # TurnContext 是“一轮用户输入”的运行态快照；它把连接级状态、

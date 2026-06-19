@@ -76,6 +76,34 @@ class SessionRecoveryTests(unittest.TestCase):
                 {"role": "assistant", "content": "README 说明这是 Codex-mini。"},
             )
 
+    def test_recover_messages_restores_confirmed_plan_context(self) -> None:
+        messages = recover_messages(
+            "system prompt",
+            [
+                _event(
+                    "session-1",
+                    "user_message",
+                    {
+                        "content": "实现 Plan Mode",
+                        "accepted_plan": {
+                            "plan_id": "plan-1",
+                            "items": [
+                                {"step": "分析需求", "status": "in_progress"},
+                                {"step": "实现改动", "status": "pending"},
+                            ],
+                            "model": "test-plan-model",
+                        },
+                    },
+                )
+            ],
+        )
+
+        self.assertEqual(messages[1]["role"], "user")
+        self.assertIn("## 用户原始请求", messages[1]["content"])
+        self.assertIn("## 已确认执行计划", messages[1]["content"])
+        self.assertIn("1. [in_progress] 分析需求", messages[1]["content"])
+        self.assertIn("2. [pending] 实现改动", messages[1]["content"])
+
     def test_recover_messages_marks_failed_tools_with_error_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = SessionStore(Path(tmp))

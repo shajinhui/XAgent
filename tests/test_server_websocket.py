@@ -164,11 +164,14 @@ class ServerWebSocketTests(unittest.TestCase):
             )
 
     def test_plan_confirm_executes_original_user_input(self) -> None:
+        observed_contexts = []
+
         async def fake_run_turn(
             ws,
             session_store,
             turn_context,
         ):
+            observed_contexts.append(turn_context)
             assistant = {"role": "assistant", "content": f"done: {turn_context.user.user_input}"}
             turn_context.history.append_assistant_message(assistant)
             record_transcript_event(
@@ -240,6 +243,12 @@ class ServerWebSocketTests(unittest.TestCase):
             self.assertEqual(task_list["plan_id"], pending["plan_id"])
             self.assertEqual(final_answer["type"], "final_answer")
             self.assertEqual(final_answer["content"], "done: 实现 Plan Mode")
+            self.assertEqual(observed_contexts[-1].user.user_input, "实现 Plan Mode")
+            model_user_message = observed_contexts[-1].history.messages[1]["content"]
+            self.assertIn("## 用户原始请求", model_user_message)
+            self.assertIn("## 已确认执行计划", model_user_message)
+            self.assertIn("1. [in_progress] 分析需求", model_user_message)
+            self.assertIn("2. [pending] 实现改动", model_user_message)
             self.assertEqual(
                 [event.type for event in events],
                 [

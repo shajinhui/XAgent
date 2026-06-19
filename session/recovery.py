@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+from context_manager.plan_context import render_confirmed_plan_user_message
 from session.models import TranscriptEvent
 from session.store import SessionStore
 
@@ -34,7 +35,15 @@ def recover_messages(
         if event.type == "user_message":
             content = str(payload.get("content") or "")
             if content:
-                messages.append({"role": "user", "content": content})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": render_confirmed_plan_user_message(
+                            content,
+                            _accepted_plan_from_payload(payload),
+                        ),
+                    }
+                )
             continue
 
         if event.type == "assistant_message":
@@ -77,6 +86,13 @@ def _load_session_memory(session_id: str, project_root: Path) -> str | None:
         return entry.content if entry else None
     except Exception:
         return None
+
+
+def _accepted_plan_from_payload(payload: Dict[str, Any]) -> Dict[str, Any] | None:
+    """读取 user_message 里的已确认计划，用于恢复模型可见执行约束。"""
+
+    accepted_plan = payload.get("accepted_plan")
+    return accepted_plan if isinstance(accepted_plan, dict) else None
 
 
 def _assistant_message_from_payload(payload: Dict[str, Any]) -> Dict[str, Any] | None:
