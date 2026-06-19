@@ -2354,15 +2354,15 @@ textarea:disabled {
 .composer-tool-menu {
   position: absolute;
   left: 0;
-  bottom: calc(100% + 12px);
+  bottom: calc(100% + 8px);
   z-index: 20;
-  width: min(260px, calc(100vw - 48px));
+  width: min(188px, calc(100vw - 32px));
   display: grid;
   border: 1px solid var(--border-strong);
-  border-radius: 18px;
-  padding: 8px;
+  border-radius: 14px;
+  padding: 6px;
   background: var(--panel-elevated-bg);
-  box-shadow: 0 22px 70px var(--shadow-menu);
+  box-shadow: 0 12px 36px var(--shadow-menu);
 }
 
 .composer-tool-option {
@@ -2371,14 +2371,14 @@ textarea:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
+  gap: 12px;
   border: 0;
-  border-radius: 12px;
-  padding: 10px 12px;
+  border-radius: 10px;
+  padding: 8px 9px;
   color: var(--text-primary);
   background: transparent;
-  font-size: 15px;
-  font-weight: 760;
+  font-size: 13px;
+  font-weight: 720;
   cursor: pointer;
 }
 
@@ -2390,32 +2390,32 @@ textarea:disabled {
   min-width: 0;
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .composer-tool-option-main svg {
-  width: 19px;
-  height: 19px;
+  width: 16px;
+  height: 16px;
   color: var(--text-secondary);
 }
 
 .composer-switch {
-  width: 44px;
-  height: 26px;
-  flex: 0 0 44px;
+  width: 34px;
+  height: 20px;
+  flex: 0 0 34px;
   display: inline-flex;
   align-items: center;
   border-radius: 999px;
-  padding: 3px;
+  padding: 2px;
   background: var(--surface-selected-strong);
   transition: background 0.16s ease;
 }
 
 .composer-switch span {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   border-radius: 999px;
-  background: var(--text-selected);
+  background: #fff;
   box-shadow: 0 1px 4px var(--shadow-panel);
   transition: transform 0.16s ease;
 }
@@ -2425,7 +2425,7 @@ textarea:disabled {
 }
 
 .composer-switch.active span {
-  transform: translateX(18px);
+  transform: translateX(14px);
 }
 
 .permission-mode-trigger {

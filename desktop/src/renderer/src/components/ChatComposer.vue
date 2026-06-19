@@ -145,7 +145,6 @@ function sendMessage(): void {
 function togglePlanMode(): void {
   if (props.disabled || isSubmitting.value) return
   emit('update:planMode', !props.planModeEnabled)
-  toolMenuOpen.value = false
 }
 
 function handleEnter(event: KeyboardEvent): void {
