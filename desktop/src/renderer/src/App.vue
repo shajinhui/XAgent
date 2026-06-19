@@ -785,7 +785,7 @@ onBeforeUnmount(() => {
             :plan-mode-enabled="runtime.planModeEnabled"
             @send="runtime.sendUserInput"
             @plan="(content) => void runtime.requestPlan(content)"
-            @update:plan-mode-enabled="(enabled) => runtime.setPlanModeEnabled(enabled)"
+            @toggle-plan-mode="runtime.setPlanModeEnabled(!runtime.planModeEnabled)"
             @update:model="runtime.setSelectedModel"
             @update:reasoning-effort="runtime.setReasoningEffort"
             @update:permission-mode="runtime.setPermissionMode"

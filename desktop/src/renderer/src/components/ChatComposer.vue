@@ -17,7 +17,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   send: [content: string]
   plan: [content: string]
-  'update:plan-mode-enabled': [enabled: boolean]
+  'toggle-plan-mode': []
   'update:model': [model: string]
   'update:reasoningEffort': [effort: string]
   'update:permissionMode': [mode: RuntimePermissionMode]
@@ -142,9 +142,9 @@ function sendMessage(): void {
   unlockSubmitSoon()
 }
 
-function updatePlanModeFromInput(event: Event): void {
+function togglePlanMode(): void {
   if (props.disabled || isSubmitting.value) return
-  emit('update:plan-mode-enabled', (event.target as HTMLInputElement).checked)
+  emit('toggle-plan-mode')
 }
 
 function handleEnter(event: KeyboardEvent): void {
@@ -192,25 +192,20 @@ onBeforeUnmount(() => {
             <Plus />
           </button>
           <div v-if="toolMenuOpen" class="composer-tool-menu">
-            <label
+            <button
               class="composer-tool-option"
+              type="button"
+              :aria-pressed="planModeEnabled"
+              @click.stop="togglePlanMode"
             >
               <span class="composer-tool-option-main">
                 <ListChecks />
                 <span>计划模式</span>
               </span>
-              <input
-                class="composer-switch-input"
-                type="checkbox"
-                :checked="planModeEnabled"
-                :disabled="disabled || isSubmitting"
-                aria-label="计划模式"
-                @change="updatePlanModeFromInput"
-              />
               <span class="composer-switch" :class="{ active: planModeEnabled }">
                 <span></span>
               </span>
-            </label>
+            </button>
           </div>
         </div>
         <div class="permission-mode-control">
