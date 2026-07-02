@@ -143,11 +143,23 @@ class SecureMacOSSandboxExecutor:
             return self._run_without_sandbox(shell_command, command_cwd, timeout_seconds)
 
         if platform.system() != "Darwin":
-            return CommandExecResult(False, 127, "", "macOS 原生沙箱仅支持 Darwin/macOS")
+            return CommandExecResult(
+                False,
+                127,
+                "",
+                "macOS 原生沙箱仅支持 Darwin/macOS；当前环境不能启用 Seatbelt。"
+                "如需继续，请在桌面端显式切换到完全访问模式后重试。",
+            )
 
         sandbox_exec = shutil.which(self.sandbox_exec_path) or shutil.which("sandbox-exec")
         if not sandbox_exec:
-            return CommandExecResult(False, 127, "", "sandbox-exec 不可用，无法启用 macOS 原生沙箱")
+            return CommandExecResult(
+                False,
+                127,
+                "",
+                "sandbox-exec 不可用，无法启用 macOS 原生沙箱。"
+                "当前请求已停止；如需临时绕过，请显式切换到完全访问模式。",
+            )
 
         try:
             # 使用 /bin/sh -lc 保持与终端 shell 命令接近的行为，同时由 Seatbelt 限制写入。
@@ -179,7 +191,7 @@ class SecureMacOSSandboxExecutor:
         if proc.returncode == 71 and "sandbox_apply: Operation not permitted" in stderr:
             stderr += (
                 "\n当前进程可能已经处于受限沙箱中，无法再次应用 macOS Seatbelt profile。"
-                "请在正常终端或桌面应用运行环境中验证。"
+                "请在正常终端或桌面应用运行环境中验证；如需临时绕过，请显式切换到完全访问模式。"
             )
 
         return CommandExecResult(

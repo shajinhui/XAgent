@@ -159,10 +159,12 @@ def _command_metadata(
     *,
     category: str | None = None,
 ) -> dict:
+    sandbox_enabled = ctx.permission_profile != PermissionProfile.DANGER_NO_SANDBOX
     metadata = {
         "error_type": error_type,
         "permission_action": permission_action,
         "category": category or decision.category,
+        "reason": decision.reason,
         "command": command,
         "cwd": _display_cwd(ctx, cwd),
         "selected_root": ctx.selected_root.as_posix(),
@@ -170,6 +172,8 @@ def _command_metadata(
         "permission_profile": ctx.permission_profile.value,
         "approval_policy": ctx.approval_policy.value,
         "network_policy": ctx.network_policy.value,
+        "sandbox_enabled": sandbox_enabled,
+        "network_enabled": ctx.network_policy.value == "enabled",
     }
     if decision.suggested_prefix_rule:
         metadata["suggested_prefix_rule"] = list(decision.suggested_prefix_rule)

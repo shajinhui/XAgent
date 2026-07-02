@@ -31,6 +31,8 @@ from server.runtime.transcript_events import record_transcript_event
 from server.runtime.turn_runner import TurnCancelled, run_turn
 from server.runtime.websocket_context import WebSocketRuntimeContext
 from session.turn_context import TurnContext
+from skills import TurnSkills
+from skills.selection import build_skill_injections, collect_selected_skills
 from tools.core.registry import ToolRegistry
 from tools.core.router import ToolRouter
 from tools.core.runner import ToolRunner
@@ -126,7 +128,7 @@ def build_graph(registry: ToolRegistry, runner: ToolRunner):
 
 
 if FastAPI is not None:
-    app = FastAPI(title="Codex-mini Agent Service")
+    app = FastAPI(title="XCode Agent Service")
 else:  # pragma: no cover
     app = None
 
@@ -249,8 +251,24 @@ if app is not None:
                 context.history.clear_historical_reasoning_content()
                 model_user_text = render_confirmed_plan_user_message(user_text, accepted_plan)
                 context.history.append_user_message(model_user_text)
+                current_user_message_index = len(context.history.messages) - 1
                 turn_id = str(uuid.uuid4())
                 context.session_state.start_turn(turn_id)
+                skills_outcome = context.skill_manager.load_for_workspace(context.workspace)
+                selected_skills, selection_warnings = collect_selected_skills(
+                    outcome=skills_outcome,
+                    user_input=user_text,
+                    selected_skills=packet.get("selected_skills"),
+                )
+                skill_injections, injection_warnings = build_skill_injections(
+                    selected=selected_skills,
+                    resolver=context.skill_manager.resolver,
+                )
+                turn_skills = TurnSkills(
+                    outcome=skills_outcome,
+                    injections=skill_injections,
+                    warnings=[*selection_warnings, *injection_warnings],
+                )
                 # TurnContext 是“一轮用户输入”的运行态快照；它把连接级状态、
                 # 模型配置、workspace、history 和工具运行器收束成一个参数传给 run_turn。
                 turn_context = TurnContext.from_runtime(
@@ -264,6 +282,8 @@ if app is not None:
                     system_prompt=turn_system_prompt,
                     user_input=user_text,
                     model_config=model_config,
+                    turn_skills=turn_skills,
+                    current_user_message_index=current_user_message_index,
                 )
                 if accepted_plan:
                     record_transcript_event(
@@ -275,6 +295,8 @@ if app is not None:
                             "request_id": packet.get("_plan_request_id") or packet.get("request_id"),
                             "plan_id": accepted_plan.get("plan_id"),
                             "content": accepted_plan.get("content"),
+                            "summary": accepted_plan.get("summary"),
+                            "plan_markdown": accepted_plan.get("plan_markdown"),
                             "items": accepted_plan.get("items") or [],
                             "model": accepted_plan.get("model"),
                         },
@@ -287,6 +309,8 @@ if app is not None:
                 if accepted_plan:
                     user_message_payload["accepted_plan"] = {
                         "plan_id": accepted_plan.get("plan_id"),
+                        "summary": accepted_plan.get("summary"),
+                        "plan_markdown": accepted_plan.get("plan_markdown"),
                         "items": accepted_plan.get("items") or [],
                         "model": accepted_plan.get("model"),
                     }
@@ -315,6 +339,52 @@ if app is not None:
                         model_config=model_config.as_dict(),
                     )
                 )
+                for warning in turn_skills.warnings:
+                    record_transcript_event(
+                        context.session_store,
+                        context.session_id,
+                        "skill_warning",
+                        {
+                            "turn_id": turn_id,
+                            "message": warning,
+                        },
+                    )
+                    await ws.send_json(
+                        build_event(
+                            "skill_warning",
+                            context.session_id,
+                            turn_id,
+                            message=warning,
+                        )
+                    )
+                for injection in turn_skills.injections:
+                    skill_used_payload = {
+                        "turn_id": turn_id,
+                        "name": injection.name,
+                        "path": injection.path.as_posix(),
+                        "scope": "unknown",
+                        "invocation_type": injection.invocation_type,
+                    }
+                    matched_skill = skills_outcome.find_by_path(injection.path)
+                    if matched_skill is not None:
+                        skill_used_payload["scope"] = matched_skill.scope.value
+                    record_transcript_event(
+                        context.session_store,
+                        context.session_id,
+                        "skill_used",
+                        skill_used_payload,
+                    )
+                    await ws.send_json(
+                        build_event(
+                            "skill_used",
+                            context.session_id,
+                            turn_id,
+                            name=skill_used_payload["name"],
+                            path=skill_used_payload["path"],
+                            scope=skill_used_payload["scope"],
+                            invocation_type=skill_used_payload["invocation_type"],
+                        )
+                    )
                 task_list_plan_id = None
                 task_list_source = "auto"
                 if accepted_plan:

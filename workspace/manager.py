@@ -99,11 +99,23 @@ def _find_git_root(path: Path) -> Path | None:
 
     current = path
     while True:
-        if (current / ".git").exists():
+        if (current / ".git").exists() and _is_safe_project_root(current):
             return current
         if current.parent == current:
             return None
         current = current.parent
+
+
+def _is_safe_project_root(path: Path) -> bool:
+    """Git 根也必须满足 workspace 边界，避免把 Home 误当项目。"""
+
+    if path.resolve() == Path.home().resolve():
+        return False
+    try:
+        validate_workspace_path(path)
+    except WorkspaceValidationError:
+        return False
+    return True
 
 
 def _required_path(snapshot: dict[str, Any], key: str) -> Path:

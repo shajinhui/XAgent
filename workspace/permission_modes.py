@@ -17,31 +17,40 @@ def policy_for_permission_mode(
     if mode == PermissionMode.REQUEST_APPROVAL:
         return ProjectPolicyConfig(
             source="runtime_mode",
+            config_path=project_policy.config_path,
             permission_mode=mode,
             permission_profile=PermissionProfile.WORKSPACE_WRITE,
             approval_policy=ApprovalPolicy.ASK_BEFORE_MUTATING,
             network_policy=NetworkPolicy.RESTRICTED,
             exec_policy=ExecPolicy(),
+            test_command=project_policy.test_command,
+            test_timeout=project_policy.test_timeout,
         )
 
     if mode == PermissionMode.AUTO_APPROVE:
         return ProjectPolicyConfig(
             source="runtime_mode",
+            config_path=project_policy.config_path,
             permission_mode=mode,
             permission_profile=PermissionProfile.WORKSPACE_WRITE,
             approval_policy=ApprovalPolicy.AUTO,
             network_policy=NetworkPolicy.RESTRICTED,
             exec_policy=ExecPolicy(),
+            test_command=project_policy.test_command,
+            test_timeout=project_policy.test_timeout,
         )
 
     if mode == PermissionMode.FULL_ACCESS:
         return ProjectPolicyConfig(
             source="runtime_mode",
+            config_path=project_policy.config_path,
             permission_mode=mode,
             permission_profile=PermissionProfile.DANGER_NO_SANDBOX,
             approval_policy=ApprovalPolicy.AUTO,
             network_policy=NetworkPolicy.ENABLED,
             exec_policy=ExecPolicy(protect_paths=False),
+            test_command=project_policy.test_command,
+            test_timeout=project_policy.test_timeout,
         )
 
     if mode == PermissionMode.CUSTOM:

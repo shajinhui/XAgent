@@ -7,6 +7,7 @@ WebSocket 入口只负责收发 packet；本模块负责一轮 user_input 之后
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
@@ -25,6 +26,7 @@ from server.runtime.transcript_events import (
     record_transcript_event,
 )
 from context_manager import ContextManager
+from patch import PatchFileChange, PatchProposal, PatchStatus, PatchStore
 from session import SessionStore
 from session.turn_context import TurnContext
 from tools.core.registry import ToolRegistry
@@ -308,6 +310,11 @@ async def emit_tool_result(
     """写入并发送工具执行结果，必要时同步会话挂起状态。"""
 
     metadata = result.metadata or {}
+    transcript_content = result.content
+    if metadata.get("skill_used"):
+        transcript_content = "[skill content omitted from transcript]"
+    elif metadata.get("skill_resource"):
+        transcript_content = "[skill resource content omitted from transcript]"
     record_transcript_event(
         session_store,
         session_id,
@@ -317,7 +324,7 @@ async def emit_tool_result(
             "request_id": request_id,
             "tool": tool_name,
             "ok": result.ok,
-            "content": result.content,
+            "content": transcript_content,
             "metadata": metadata,
         },
     )
@@ -332,6 +339,15 @@ async def emit_tool_result(
             content=result.content,
             metadata=metadata,
         )
+    )
+    await _emit_patch_lifecycle_event(
+        ws,
+        session_store,
+        metadata,
+        session_id,
+        turn_id,
+        request_id,
+        tool_name,
     )
 
     if metadata.get("session_suspended"):
@@ -362,6 +378,173 @@ async def emit_tool_result(
         )
 
 
+async def _emit_patch_lifecycle_event(
+    ws: Any,
+    session_store: SessionStore,
+    metadata: Dict[str, Any],
+    session_id: str,
+    turn_id: str,
+    request_id: str,
+    tool_name: str,
+) -> None:
+    """把 patch 工具结果转换为独立 lifecycle event。"""
+
+    patch_id = str(metadata.get("patch_id") or "").strip()
+    patch_status = str(metadata.get("patch_status") or "").strip()
+    if not patch_id or not patch_status:
+        return
+
+    event_type = _patch_event_type(patch_status)
+    if event_type is None:
+        return
+
+    try:
+        proposal = PatchStore(session_store.project_root / ".codex-mini" / "patches").load(patch_id)
+    except Exception:
+        # patch lifecycle 只是展示/恢复事件，不能反过来中断已完成的工具结果上报。
+        proposal = None
+    payload = _patch_event_payload(
+        metadata,
+        proposal,
+        turn_id=turn_id,
+        request_id=request_id,
+        tool_name=tool_name,
+        patch_id=patch_id,
+        patch_status=patch_status,
+    )
+    record_transcript_event(session_store, session_id, event_type, payload)
+    await ws.send_json(
+        build_event(
+            event_type,
+            session_id,
+            turn_id,
+            request_id=request_id,
+            **{key: value for key, value in payload.items() if key not in {"turn_id", "request_id"}},
+        )
+    )
+
+
+async def _emit_patch_approval_request_event(
+    ws: Any,
+    session_store: SessionStore,
+    *,
+    session_id: str,
+    turn_id: str,
+    request_id: str,
+    tool_name: str,
+    arguments: str,
+    metadata: Dict[str, Any],
+) -> None:
+    """把 apply/reject patch 的普通权限请求补充为 patch 专用审批事件。"""
+
+    patch_id = _patch_id_from_tool_arguments(tool_name, arguments)
+    if not patch_id:
+        return
+
+    try:
+        proposal = PatchStore(session_store.project_root / ".codex-mini" / "patches").load(patch_id)
+    except Exception:
+        # 非法 id 或损坏文件都只影响 review 详情展示，普通 permission_request 仍然可用。
+        proposal = None
+
+    patch_status = proposal.status.value if proposal else str(metadata.get("patch_status") or "")
+    if tool_name == "reject_patch":
+        action = "reject"
+    elif tool_name == "rollback_patch":
+        action = "rollback"
+    else:
+        action = "apply"
+    payload = _patch_event_payload(
+        {
+            **metadata,
+            "action": action,
+        },
+        proposal,
+        turn_id=turn_id,
+        request_id=request_id,
+        tool_name=tool_name,
+        patch_id=patch_id,
+        patch_status=patch_status,
+    )
+    record_transcript_event(session_store, session_id, "patch_approval_request", payload)
+    await ws.send_json(
+        build_event(
+            "patch_approval_request",
+            session_id,
+            turn_id,
+            request_id=request_id,
+            **{key: value for key, value in payload.items() if key not in {"turn_id", "request_id"}},
+        )
+    )
+
+
+def _patch_id_from_tool_arguments(tool_name: str, arguments: str) -> str | None:
+    """从 patch review 工具参数中提取 patch_id，其他工具不参与 patch 审批事件。"""
+
+    if tool_name not in {"apply_patch", "reject_patch", "rollback_patch"}:
+        return None
+    try:
+        payload = json.loads(arguments or "{}")
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    patch_id = str(payload.get("patch_id") or "").strip()
+    return patch_id or None
+
+
+def _patch_event_type(patch_status: str) -> str | None:
+    return {
+        PatchStatus.PROPOSED.value: "patch_proposed",
+        PatchStatus.APPLIED.value: "patch_applied",
+        PatchStatus.REJECTED.value: "patch_rejected",
+        PatchStatus.FAILED.value: "patch_apply_failed",
+        PatchStatus.ROLLED_BACK.value: "patch_rolled_back",
+    }.get(patch_status)
+
+
+def _patch_event_payload(
+    metadata: Dict[str, Any],
+    proposal: PatchProposal | None,
+    *,
+    turn_id: str,
+    request_id: str,
+    tool_name: str,
+    patch_id: str,
+    patch_status: str,
+) -> Dict[str, Any]:
+    changes = [_patch_change_payload(change) for change in proposal.changes] if proposal else []
+    return {
+        "turn_id": turn_id,
+        "request_id": request_id,
+        "tool": tool_name,
+        "patch_id": patch_id,
+        "patch_status": patch_status,
+        "summary": proposal.summary if proposal else None,
+        "changed_paths": proposal.changed_paths if proposal else list(metadata.get("changed_paths") or []),
+        "additions": proposal.additions if proposal else metadata.get("additions"),
+        "deletions": proposal.deletions if proposal else metadata.get("deletions"),
+        "changes": changes,
+        "metadata": {
+            key: value
+            for key, value in metadata.items()
+            # lifecycle 事件只展示 review 摘要，完整 before/after 快照留在 patch store。
+            if key not in {"patch_id", "patch_status", "before", "after", "content"}
+        },
+    }
+
+
+def _patch_change_payload(change: PatchFileChange) -> Dict[str, Any]:
+    return {
+        "path": change.path,
+        "change_type": change.change_type.value,
+        "unified_diff": change.unified_diff,
+        "additions": change.additions,
+        "deletions": change.deletions,
+        "move_path": change.move_path,
+    }
+
+
 async def run_turn(
     ws: Any,
     session_store: SessionStore,
@@ -386,7 +569,7 @@ async def run_turn(
         message = await stream_model_message(
             ws,
             registry,
-            history.messages,
+            turn_context.model_messages(),
             session_id,
             turn_id,
             model_config,
@@ -401,6 +584,7 @@ async def run_turn(
 
         tool_calls = message.get("tool_calls") or []
         if not tool_calls:
+            _strip_skill_tool_results(history)
             return history
 
         # 模型可能一次返回多个工具调用；当前按顺序执行，便于权限和 transcript 对齐。
@@ -475,6 +659,16 @@ async def run_turn(
                         metadata=metadata,
                     )
                 )
+                await _emit_patch_approval_request_event(
+                    ws,
+                    session_store,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    request_id=request_id,
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    metadata=metadata,
+                )
                 permission_decision = await wait_for_permission_decision(
                     ws,
                     session_id,
@@ -525,6 +719,32 @@ async def run_turn(
                     )
                     metadata = result.metadata or {}
 
+            if result.ok and metadata.get("skill_used"):
+                skill_payload = {
+                    "turn_id": turn_id,
+                    "name": str(metadata.get("skill_name") or ""),
+                    "path": str(metadata.get("skill_path") or ""),
+                    "scope": str(metadata.get("skill_scope") or ""),
+                    "invocation_type": str(metadata.get("invocation_type") or "implicit"),
+                }
+                record_transcript_event(
+                    session_store,
+                    session_id,
+                    "skill_used",
+                    skill_payload,
+                )
+                await ws.send_json(
+                    build_event(
+                        "skill_used",
+                        session_id,
+                        turn_id,
+                        name=skill_payload["name"],
+                        path=skill_payload["path"],
+                        scope=skill_payload["scope"],
+                        invocation_type=skill_payload["invocation_type"],
+                    )
+                )
+
             await emit_tool_result(
                 ws,
                 session_store,
@@ -540,6 +760,7 @@ async def run_turn(
             # 工具结果必须作为 role=tool 回灌给模型，否则模型看不到刚才的执行结果。
             history.append_tool_result(request_id, tool_name, content)
             if session_state.suspended:
+                _strip_skill_tool_results(history)
                 return history
 
 
@@ -564,6 +785,18 @@ def _normalize_clarification_response(response: Dict[str, Any]) -> Dict[str, Any
             pass
 
     return normalized
+
+
+def _strip_skill_tool_results(history: ContextManager) -> None:
+    """回合结束后移除完整 skill 内容，避免污染下一轮长期上下文。"""
+
+    for message in history.messages:
+        if message.get("role") != "tool":
+            continue
+        if message.get("name") == "read_skill":
+            message["content"] = "[skill content omitted from history after this turn]"
+        elif message.get("name") == "read_skill_resource":
+            message["content"] = "[skill resource content omitted from history after this turn]"
 
 
 def _normalize_prefix_rule(value: Any) -> tuple[str, ...] | None:

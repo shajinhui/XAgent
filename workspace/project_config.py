@@ -18,7 +18,7 @@ from workspace.models import PermissionMode, WorkspaceTrust, WorkspaceValidation
 
 
 PROJECT_CONFIG_RELATIVE_PATH = Path(".codex-mini") / "config.toml"
-_ALLOWED_TOP_LEVEL_KEYS = {"permissions", "exec"}
+_ALLOWED_TOP_LEVEL_KEYS = {"permissions", "exec", "tests"}
 _SENSITIVE_KEYS = {
     "api",
     "api_base",
@@ -66,6 +66,8 @@ class ProjectPolicyConfig:
     approval_policy: ApprovalPolicy = ApprovalPolicy.ASK_BEFORE_MUTATING
     network_policy: NetworkPolicy = NetworkPolicy.RESTRICTED
     exec_policy: ExecPolicy = ExecPolicy()
+    test_command: str | None = None
+    test_timeout: int = 60
 
     def as_dict(self) -> dict[str, Any]:
         """返回可放入 workspace payload / session metadata 的安全摘要。"""
@@ -78,6 +80,8 @@ class ProjectPolicyConfig:
             "approval_policy": self.approval_policy.value,
             "network_policy": self.network_policy.value,
             "exec_rule_count": len(self.exec_policy.rules),
+            "test_command": self.test_command,
+            "test_timeout": self.test_timeout if self.test_command else None,
         }
 
 
@@ -111,6 +115,7 @@ def load_project_policy(project_root: Path, trust: WorkspaceTrust) -> ProjectPol
 
     permissions = _section(raw, "permissions", config_path)
     exec_section = _section(raw, "exec", config_path)
+    tests_section = _section(raw, "tests", config_path)
     return ProjectPolicyConfig(
         source="project_config",
         config_path=config_path,
@@ -119,6 +124,8 @@ def load_project_policy(project_root: Path, trust: WorkspaceTrust) -> ProjectPol
         approval_policy=_parse_approval_policy(permissions.get("approval_policy"), config_path),
         network_policy=_parse_network_policy(permissions.get("network"), config_path),
         exec_policy=ExecPolicy(_parse_exec_rules(exec_section.get("rules", []), config_path)),
+        test_command=_parse_test_command(tests_section.get("command"), config_path),
+        test_timeout=_parse_test_timeout(tests_section.get("timeout"), config_path),
     )
 
 
@@ -215,6 +222,39 @@ def _parse_exec_rules(raw_rules: Any, config_path: Path) -> tuple[ExecPolicyRule
         else:
             raise WorkspaceValidationError(f"项目配置 exec rule action 无效: {action}")
     return tuple(rules)
+
+
+def _parse_test_command(value: Any, config_path: Path) -> str | None:
+    """读取 trusted config 中显式声明的测试命令，不做项目类型猜测。"""
+
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str):
+        raise WorkspaceValidationError(f"项目配置 tests.command 必须是字符串: {config_path.as_posix()}")
+    command = " ".join(value.strip().split())
+    if not command:
+        return None
+    if len(command) > 1000:
+        raise WorkspaceValidationError(f"项目配置 tests.command 过长: {config_path.as_posix()}")
+
+    decision = ExecPolicy().decide(command, approved=True)
+    if not decision.allowed:
+        raise WorkspaceValidationError(
+            f"项目配置 tests.command 被安全策略拒绝: {decision.category} ({config_path.as_posix()})"
+        )
+    return command
+
+
+def _parse_test_timeout(value: Any, config_path: Path) -> int:
+    """读取测试命令超时，保持和 apply_patch 工具相同的范围。"""
+
+    if value is None:
+        return 60
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise WorkspaceValidationError(f"项目配置 tests.timeout 必须是整数秒: {config_path.as_posix()}")
+    if value < 1 or value > 600:
+        raise WorkspaceValidationError(f"项目配置 tests.timeout 必须在 1 到 600 秒之间: {config_path.as_posix()}")
+    return value
 
 
 def _parse_prefix(raw_prefix: Any, config_path: Path, index: int) -> tuple[str, ...]:

@@ -22,7 +22,7 @@ class TestPromptTemplates(unittest.TestCase):
         """核心提示词应该成功加载。"""
         self.assertIsInstance(CORE_PROMPT, str)
         self.assertGreater(len(CORE_PROMPT), 100)
-        self.assertIn("Codex-mini", CORE_PROMPT)
+        self.assertIn("XCode", CORE_PROMPT)
         self.assertIn("{{ personality }}", CORE_PROMPT)
 
     def test_personality_templates_loaded(self):
@@ -57,7 +57,7 @@ class TestPromptBuilder(unittest.TestCase):
         result = self.builder.build(config)
 
         self.assertIsInstance(result, str)
-        self.assertIn("Codex-mini", result)
+        self.assertIn("XCode", result)
         self.assertNotIn("{{ personality }}", result)
         self.assertIn(PERSONALITY_DEFAULT, result)
 
@@ -129,7 +129,7 @@ class TestPromptBuilder(unittest.TestCase):
         )
 
         # 查找各部分的位置
-        core_pos = result.find("Codex-mini")
+        core_pos = result.find("XCode")
         tools_pos = result.find("rg")  # TOOLS_SHELL 的标志
         workspace_pos = result.find("WORKSPACE_MARKER")
         project_pos = result.find("PROJECT_MARKER")

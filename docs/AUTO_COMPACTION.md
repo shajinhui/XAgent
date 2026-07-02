@@ -278,5 +278,5 @@ PYTHONPATH=. python3 tests/test_compaction.py
 - `context_manager/summarizer.py` - 摘要生成
 - `agent_loop.py` - 集成点
 - `tests/test_compaction.py` - 单元测试
-- `docs/CONTEXT_COMPRESSION.md` - 压缩机制详解
-- `docs/CONTEXT_OVERFLOW_HANDLING.md` - 溢出处理对比
+- `docs/MEMORY_LAYER.md` - Memory 和会话摘要设计
+- `docs/PROJECT_ARCHITECTURE_STATUS.md` - 当前架构状态

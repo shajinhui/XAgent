@@ -4,6 +4,7 @@ import tempfile
 import unittest
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from server.app import build_system_prompt
 from server.runtime.session_state import create_websocket_session, persist_websocket_session
@@ -97,6 +98,20 @@ class WorkspaceValidationTests(unittest.TestCase):
             self.assertEqual(workspace.selected_root, selected.resolve())
             self.assertEqual(workspace.project_root, selected.resolve())
             self.assertEqual(workspace.current_dir, selected.resolve())
+            self.assertIsNone(workspace.git_root)
+
+    def test_workspace_manager_ignores_home_git_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_home = Path(tmp) / "home"
+            selected = fake_home / "Documents" / "code" / "demo"
+            selected.mkdir(parents=True)
+            (fake_home / ".git").mkdir()
+
+            with patch("workspace.manager.Path.home", return_value=fake_home.resolve()):
+                workspace = WorkspaceManager(selected).open()
+
+            self.assertEqual(workspace.selected_root, selected.resolve())
+            self.assertEqual(workspace.project_root, selected.resolve())
             self.assertIsNone(workspace.git_root)
 
     def test_workspace_payload_contains_v2_snapshot_fields(self) -> None:
@@ -279,6 +294,10 @@ class WorkspaceValidationTests(unittest.TestCase):
 profile = "read_only"
 approval_policy = "never"
 
+[tests]
+command = "python -m unittest discover -s tests"
+timeout = 17
+
 [[exec.rules]]
 action = "deny"
 prefix = ["npm", "publish"]
@@ -298,8 +317,29 @@ category = "publish_blocked"
             self.assertEqual(workspace.trust.level, TrustLevel.TRUSTED)
             assert workspace.project_policy is not None
             self.assertEqual(workspace.project_policy.source, "project_config")
+            self.assertEqual(workspace.project_policy.test_command, "python -m unittest discover -s tests")
+            self.assertEqual(workspace.project_policy.test_timeout, 17)
             self.assertEqual(runner.ctx.permission_profile, PermissionProfile.READ_ONLY)
+            self.assertEqual(runner.ctx.default_test_command, "python -m unittest discover -s tests")
+            self.assertEqual(runner.ctx.default_test_timeout, 17)
             self.assertEqual(runner.ctx.policy.check_command("npm publish").category, "publish_blocked")
+
+    def test_trusted_project_config_rejects_dangerous_test_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            trust_path = Path(tmp) / "trust.json"
+            root.mkdir()
+            config_dir = root / ".codex-mini"
+            config_dir.mkdir()
+            (config_dir / "config.toml").write_text(
+                "[tests]\ncommand = \"rm -rf /\"\n",
+                encoding="utf-8",
+            )
+            trust_store = WorkspaceTrustStore(trust_path)
+            trust_store.mark_trusted(root)
+
+            with self.assertRaisesRegex(WorkspaceValidationError, "tests.command 被安全策略拒绝"):
+                WorkspaceManager(root, trust_store=trust_store).open()
 
     def test_trusted_project_config_rejects_sensitive_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -338,6 +378,102 @@ prefix = ["python"]
 
             with self.assertRaisesRegex(WorkspaceValidationError, "过宽 exec allow"):
                 WorkspaceManager(root, trust_store=trust_store).open()
+
+    def test_agents_md_test_command_becomes_default_runner_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            nested = root / "pkg"
+            nested.mkdir()
+            (root / "AGENTS.md").write_text(
+                """
+## Useful Commands
+
+```bash
+make run
+.venv/bin/python -m unittest discover -s tests
+```
+""".strip(),
+                encoding="utf-8",
+            )
+            (nested / "AGENTS.md").write_text(
+                """
+## 测试命令
+
+`pytest tests/test_patch_proposals.py`
+""".strip(),
+                encoding="utf-8",
+            )
+            workspace = WorkspaceManager(root).open()
+            workspace.change_current_dir(nested)
+
+            _session_id, _state, _registry, runner, _history = create_websocket_session(
+                workspace,
+                build_system_prompt(),
+            )
+
+            self.assertEqual(runner.ctx.default_test_command, "pytest tests/test_patch_proposals.py")
+            self.assertEqual(runner.ctx.default_test_source, "agents_md")
+            self.assertEqual(runner.ctx.default_test_timeout, 60)
+
+    def test_trusted_project_config_test_command_overrides_agents_md(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workspace"
+            trust_path = Path(tmp) / "trust.json"
+            root.mkdir()
+            (root / "AGENTS.md").write_text(
+                """
+## Useful Commands
+
+```bash
+pytest tests/test_patch_proposals.py
+```
+""".strip(),
+                encoding="utf-8",
+            )
+            config_dir = root / ".codex-mini"
+            config_dir.mkdir()
+            (config_dir / "config.toml").write_text(
+                """
+[tests]
+command = "python -m unittest discover -s tests"
+timeout = 17
+""".strip(),
+                encoding="utf-8",
+            )
+            trust_store = WorkspaceTrustStore(trust_path)
+            trust_store.mark_trusted(root)
+
+            workspace = WorkspaceManager(root, trust_store=trust_store).open()
+            _session_id, _state, _registry, runner, _history = create_websocket_session(
+                workspace,
+                build_system_prompt(),
+            )
+
+            self.assertEqual(runner.ctx.default_test_command, "python -m unittest discover -s tests")
+            self.assertEqual(runner.ctx.default_test_source, "project_config")
+            self.assertEqual(runner.ctx.default_test_timeout, 17)
+
+    def test_dangerous_agents_md_test_command_is_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "AGENTS.md").write_text(
+                """
+## 测试命令
+
+`rm -rf /`
+""".strip(),
+                encoding="utf-8",
+            )
+            workspace = WorkspaceManager(root).open()
+
+            _session_id, _state, _registry, runner, _history = create_websocket_session(
+                workspace,
+                build_system_prompt(),
+            )
+
+            self.assertIsNone(runner.ctx.default_test_command)
+            self.assertIsNone(runner.ctx.default_test_source)
+            self.assertEqual(runner.ctx.default_test_timeout, 60)
 
     def test_resume_does_not_silently_upgrade_session_only_trust(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -404,8 +540,33 @@ prefix = ["python"]
                 ["AGENTS.md", "pkg/AGENTS.md"],
             )
             self.assertIn("base prompt", prompt)
+            self.assertIn("# AGENTS.md instructions for", prompt)
+            self.assertIn("<INSTRUCTIONS>", prompt)
+            self.assertIn("</INSTRUCTIONS>", prompt)
+            self.assertIn("### AGENTS.md", prompt)
+            self.assertIn("### pkg/AGENTS.md", prompt)
             self.assertIn("root rules", prompt)
             self.assertIn("pkg rules", prompt)
+            self.assertLess(prompt.index("root rules"), prompt.index("pkg rules"))
+
+    def test_project_instructions_apply_total_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            nested = root / "pkg" / "app"
+            nested.mkdir(parents=True)
+            (root / "AGENTS.md").write_text("root", encoding="utf-8")
+            (root / "pkg" / "AGENTS.md").write_text("package-rules", encoding="utf-8")
+            workspace = WorkspaceManager(root).open()
+            workspace.change_current_dir(nested)
+
+            with patch("workspace.instructions.MAX_INSTRUCTION_TOTAL_CHARS", 8):
+                instructions = load_project_instructions(workspace)
+
+            self.assertEqual(len(instructions.files), 2)
+            self.assertEqual(instructions.files[0].content, "root")
+            self.assertIn("pack", instructions.files[1].content)
+            self.assertIn("[内容已截断]", instructions.files[1].content)
+            self.assertNotIn("age-rules", instructions.files[1].content)
 
     def test_project_instructions_do_not_cross_project_root_for_external_current_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -341,7 +341,7 @@ function createWindow(): void {
     resizable: true,
     backgroundColor: THEME_WINDOW_BACKGROUND[themeState.resolved],
     titleBarStyle: isMac ? 'hiddenInset' : 'default',
-    title: 'Codex-mini',
+    title: 'XCode',
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

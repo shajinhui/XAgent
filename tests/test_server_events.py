@@ -9,6 +9,7 @@ from unittest.mock import patch
 from session import SessionStore
 from session.models import SessionRecord, TranscriptEvent
 from session.turn_diff import TurnDiffTracker
+from patch import PatchStatus, PatchStore, build_file_change, build_patch_proposal
 from server.processors.request_dispatcher import WebSocketRequestDispatcher
 from server.processors.title_processor import (
     generate_conversation_title,
@@ -37,7 +38,7 @@ from server.runtime.model_stream import (
     clear_historical_reasoning_content,
     merge_tool_call_delta,
 )
-from server.runtime.session_state import SessionRuntimeState
+from server.runtime.session_state import SessionRuntimeState, persist_websocket_session
 from server.runtime.transcript_events import (
     answered_clarification_result,
     assistant_transcript_payload,
@@ -46,6 +47,8 @@ from server.runtime.transcript_events import (
 )
 from server.runtime.turn_runner import (
     TurnCancelled,
+    _emit_patch_approval_request_event,
+    emit_tool_result,
     request_user_clarification,
     wait_for_clarification_response,
     wait_for_permission_decision,
@@ -53,11 +56,13 @@ from server.runtime.turn_runner import (
 from server.runtime.websocket_context import WebSocketRuntimeContext
 from server.views.session_summary import (
     list_session_summaries,
+    pending_patch_review_event,
     session_display_messages,
     summarize_session_record,
 )
 from security.permissions import ApprovalPolicy, NetworkPolicy, PermissionProfile
-from workspace import PermissionMode, TrustLevel, WorkspaceTrustStore
+from tools.core.types import ToolResult
+from workspace import PermissionMode, TrustLevel, WorkspaceContext, WorkspaceTrustStore
 
 
 class FakeWebSocket:
@@ -309,6 +314,50 @@ class ServerEventTests(unittest.TestCase):
             self.assertEqual([summary["session_id"] for summary in summaries], ["active"])
             self.assertNotIn(empty.session_id, [summary["session_id"] for summary in summaries])
 
+    def test_list_session_summaries_filters_by_workspace_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "first"
+            second = root / "second"
+            first.mkdir()
+            second.mkdir()
+            store = SessionStore(root)
+            first_workspace = WorkspaceContext(
+                selected_root=first,
+                project_root=root,
+                current_dir=first,
+                display_name="first",
+            )
+            second_workspace = WorkspaceContext(
+                selected_root=second,
+                project_root=root,
+                current_dir=second,
+                display_name="second",
+            )
+            first_session = store.create_session(
+                session_id="first",
+                metadata={"workspace": first_workspace.as_dict()},
+            )
+            second_session = store.create_session(
+                session_id="second",
+                metadata={"workspace": second_workspace.as_dict()},
+            )
+            store.append_event(
+                first_session.session_id,
+                "user_message",
+                {"turn_id": "turn-first", "content": "first task"},
+            )
+            store.append_event(
+                second_session.session_id,
+                "user_message",
+                {"turn_id": "turn-second", "content": "second task"},
+            )
+
+            summaries = list_session_summaries(store, limit=10, workspace=first_workspace)
+
+            self.assertEqual([summary["session_id"] for summary in summaries], ["first"])
+            self.assertEqual(summaries[0]["workspace"]["selected_root"], first.resolve().as_posix())
+
     def test_list_session_summaries_does_not_load_empty_transcripts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = SessionStore(Path(tmp))
@@ -407,6 +456,201 @@ class ServerEventTests(unittest.TestCase):
                 },
             ],
         )
+
+    def test_pending_patch_review_event_restores_latest_unresolved_patch(self) -> None:
+        pending = pending_patch_review_event(
+            [
+                TranscriptEvent(
+                    "event-1",
+                    "session-1",
+                    "patch_proposed",
+                    1.0,
+                    {
+                        "turn_id": "turn-1",
+                        "request_id": "patch-1-request",
+                        "tool": "write_file",
+                        "patch_id": "patch-1",
+                        "patch_status": PatchStatus.PROPOSED.value,
+                        "summary": "更新 README",
+                        "changed_paths": ["README.md"],
+                        "additions": 1,
+                        "deletions": 1,
+                        "changes": [
+                            {
+                                "path": "README.md",
+                                "change_type": "update",
+                                "unified_diff": "--- a/README.md\n+++ b/README.md\n",
+                                "additions": 1,
+                                "deletions": 1,
+                                "before": "不应恢复",
+                                "after": "不应恢复",
+                            }
+                        ],
+                        "metadata": {"before": "不应恢复", "source": "dry_run"},
+                    },
+                ),
+                TranscriptEvent(
+                    "event-2",
+                    "session-1",
+                    "patch_proposed",
+                    2.0,
+                    {
+                        "turn_id": "turn-2",
+                        "request_id": "patch-2-request",
+                        "tool": "write_file",
+                        "patch_id": "patch-2",
+                        "patch_status": PatchStatus.PROPOSED.value,
+                        "summary": "更新 app.py",
+                        "changed_paths": ["app.py"],
+                        "additions": 2,
+                        "deletions": 0,
+                        "changes": [
+                            {
+                                "path": "app.py",
+                                "change_type": "update",
+                                "unified_diff": "--- a/app.py\n+++ b/app.py\n",
+                                "additions": 2,
+                                "deletions": 0,
+                            }
+                        ],
+                        "metadata": {"source": "dry_run"},
+                    },
+                ),
+            ]
+        )
+
+        self.assertIsNotNone(pending)
+        self.assertEqual(pending["type"], "patch_proposed")
+        self.assertEqual(pending["patch_id"], "patch-2")
+        self.assertEqual(pending["changed_paths"], ["app.py"])
+        self.assertEqual(pending["changes"][0]["path"], "app.py")
+        self.assertNotIn("before", pending["changes"][0])
+        self.assertNotIn("after", pending["changes"][0])
+        self.assertNotIn("before", pending["metadata"])
+
+    def test_pending_patch_review_event_ignores_resolved_patch(self) -> None:
+        pending = pending_patch_review_event(
+            [
+                TranscriptEvent(
+                    "event-1",
+                    "session-1",
+                    "patch_proposed",
+                    1.0,
+                    {
+                        "turn_id": "turn-1",
+                        "request_id": "patch-request",
+                        "tool": "write_file",
+                        "patch_id": "patch-1",
+                        "patch_status": PatchStatus.PROPOSED.value,
+                        "changed_paths": ["README.md"],
+                    },
+                ),
+                TranscriptEvent(
+                    "event-2",
+                    "session-1",
+                    "patch_applied",
+                    2.0,
+                    {
+                        "turn_id": "turn-1",
+                        "request_id": "patch-request",
+                        "tool": "apply_patch",
+                        "patch_id": "patch-1",
+                        "patch_status": PatchStatus.APPLIED.value,
+                        "changed_paths": ["README.md"],
+                    },
+                ),
+            ]
+        )
+
+        self.assertIsNone(pending)
+
+    def test_pending_patch_review_event_ignores_rolled_back_patch(self) -> None:
+        pending = pending_patch_review_event(
+            [
+                TranscriptEvent(
+                    "event-1",
+                    "session-1",
+                    "patch_proposed",
+                    1.0,
+                    {
+                        "turn_id": "turn-1",
+                        "request_id": "patch-request",
+                        "tool": "write_file",
+                        "patch_id": "patch-1",
+                        "patch_status": PatchStatus.PROPOSED.value,
+                        "changed_paths": ["README.md"],
+                    },
+                ),
+                TranscriptEvent(
+                    "event-2",
+                    "session-1",
+                    "patch_rolled_back",
+                    2.0,
+                    {
+                        "turn_id": "turn-2",
+                        "request_id": "rollback-request",
+                        "tool": "rollback_patch",
+                        "patch_id": "patch-1",
+                        "patch_status": PatchStatus.ROLLED_BACK.value,
+                        "changed_paths": ["README.md"],
+                    },
+                ),
+            ]
+        )
+
+        self.assertIsNone(pending)
+
+    def test_pending_patch_review_event_preserves_test_result_metadata(self) -> None:
+        pending = pending_patch_review_event(
+            [
+                TranscriptEvent(
+                    "event-1",
+                    "session-1",
+                    "patch_proposed",
+                    1.0,
+                    {
+                        "turn_id": "turn-2",
+                        "request_id": "patch-request-2",
+                        "tool": "apply_patch",
+                        "patch_id": "patch-test-1",
+                        "patch_status": PatchStatus.PROPOSED.value,
+                        "summary": "继续审查剩余变更",
+                        "changed_paths": ["README.md"],
+                        "changes": [
+                            {
+                                "path": "README.md",
+                                "change_type": "update",
+                                "unified_diff": "--- a/README.md\n+++ b/README.md\n",
+                                "additions": 1,
+                                "deletions": 0,
+                            }
+                        ],
+                        "metadata": {
+                            "partial_apply": True,
+                            "test_result": {
+                                "command": "python -m unittest discover -s tests",
+                                "ok": False,
+                                "exit_code": 1,
+                                "source": "explicit",
+                                "output": "FAILED sample test",
+                                "before": "不应出现在测试结果里",
+                            },
+                            "before": "不应恢复",
+                        },
+                    },
+                )
+            ]
+        )
+
+        self.assertIsNotNone(pending)
+        self.assertEqual(pending["patch_id"], "patch-test-1")
+        self.assertEqual(
+            pending["metadata"]["test_result"]["command"],
+            "python -m unittest discover -s tests",
+        )
+        self.assertFalse(pending["metadata"]["test_result"]["ok"])
+        self.assertEqual(pending["metadata"]["test_result"]["output"], "FAILED sample test")
+        self.assertNotIn("before", pending["metadata"])
 
     def test_session_display_messages_includes_clarification_exchange(self) -> None:
         messages = session_display_messages(
@@ -861,6 +1105,222 @@ class ServerEventTests(unittest.TestCase):
 
 
 class WebSocketRequestDispatcherTests(unittest.IsolatedAsyncioTestCase):
+    async def test_apply_patch_review_control_applies_stored_proposal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "app.py"
+            target.write_text("print('old')\n", encoding="utf-8")
+            context = WebSocketRuntimeContext.create(root, "system")
+            persist_websocket_session(context.session_store, context.session_id, context.workspace)
+            context.session_persisted = True
+            proposal = build_patch_proposal(
+                session_id=context.session_id,
+                turn_id="turn-preview",
+                cwd=root,
+                changes=[
+                    build_file_change(
+                        "app.py",
+                        "print('old')\n",
+                        "print('new')\n",
+                        existed_before=True,
+                        exists_after=True,
+                    )
+                ],
+                patch_id="patch-direct-apply",
+                summary="更新 app.py",
+            )
+            patch_store = PatchStore(root / ".codex-mini" / "patches")
+            patch_store.save(proposal)
+            ws = FakeWebSocket()
+            dispatcher = WebSocketRequestDispatcher(ws, context)
+
+            handled = await dispatcher.handle_control_packet(
+                {
+                    "type": "apply_patch_review",
+                    "patch_id": "patch-direct-apply",
+                    "request_id": "patch-apply-1",
+                    "turn_id": "turn-review",
+                }
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(target.read_text(encoding="utf-8"), "print('new')\n")
+            self.assertEqual(
+                [event["type"] for event in ws.sent],
+                ["tool_call_started", "tool_call_result", "patch_applied"],
+            )
+            self.assertEqual(ws.sent[0]["name"], "apply_patch")
+            self.assertEqual(ws.sent[2]["patch_id"], "patch-direct-apply")
+            self.assertEqual(ws.sent[2]["changed_paths"], ["app.py"])
+            self.assertNotIn("before", ws.sent[2]["metadata"])
+            self.assertNotIn("after", ws.sent[2]["metadata"])
+            self.assertEqual(patch_store.load("patch-direct-apply").status, PatchStatus.APPLIED)
+            self.assertEqual(
+                [event.type for event in context.session_store.load_events(context.session_id)][-3:],
+                ["tool_call_started", "tool_call_result", "patch_applied"],
+            )
+
+    async def test_apply_patch_review_control_applies_selected_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "first.py"
+            second = root / "second.py"
+            first.write_text("print('old first')\n", encoding="utf-8")
+            second.write_text("print('old second')\n", encoding="utf-8")
+            context = WebSocketRuntimeContext.create(root, "system")
+            persist_websocket_session(context.session_store, context.session_id, context.workspace)
+            context.session_persisted = True
+            proposal = build_patch_proposal(
+                session_id=context.session_id,
+                turn_id="turn-preview",
+                cwd=root,
+                changes=[
+                    build_file_change(
+                        "first.py",
+                        "print('old first')\n",
+                        "print('new first')\n",
+                        existed_before=True,
+                        exists_after=True,
+                    ),
+                    build_file_change(
+                        "second.py",
+                        "print('old second')\n",
+                        "print('new second')\n",
+                        existed_before=True,
+                        exists_after=True,
+                    ),
+                ],
+                patch_id="patch-direct-partial",
+                summary="更新两个文件",
+            )
+            patch_store = PatchStore(root / ".codex-mini" / "patches")
+            patch_store.save(proposal)
+            ws = FakeWebSocket()
+            dispatcher = WebSocketRequestDispatcher(ws, context)
+
+            handled = await dispatcher.handle_control_packet(
+                {
+                    "type": "apply_patch_review",
+                    "patch_id": "patch-direct-partial",
+                    "selected_paths": ["first.py"],
+                    "request_id": "patch-apply-partial",
+                    "turn_id": "turn-review",
+                }
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(first.read_text(encoding="utf-8"), "print('new first')\n")
+            self.assertEqual(second.read_text(encoding="utf-8"), "print('old second')\n")
+            self.assertEqual(
+                [event["type"] for event in ws.sent],
+                ["tool_call_started", "tool_call_result", "patch_proposed"],
+            )
+            self.assertTrue(ws.sent[1]["metadata"]["partial_apply"])
+            self.assertTrue(ws.sent[2]["metadata"]["partial_apply"])
+            self.assertEqual(ws.sent[2]["changed_paths"], ["second.py"])
+            proposal = patch_store.load("patch-direct-partial")
+            self.assertEqual(proposal.status, PatchStatus.PROPOSED)
+            self.assertEqual(proposal.changed_paths, ["second.py"])
+
+    async def test_reject_patch_review_control_rejects_stored_proposal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "app.py"
+            target.write_text("print('old')\n", encoding="utf-8")
+            context = WebSocketRuntimeContext.create(root, "system")
+            persist_websocket_session(context.session_store, context.session_id, context.workspace)
+            context.session_persisted = True
+            proposal = build_patch_proposal(
+                session_id=context.session_id,
+                turn_id="turn-preview",
+                cwd=root,
+                changes=[
+                    build_file_change(
+                        "app.py",
+                        "print('old')\n",
+                        "print('new')\n",
+                        existed_before=True,
+                        exists_after=True,
+                    )
+                ],
+                patch_id="patch-direct-reject",
+                summary="更新 app.py",
+            )
+            patch_store = PatchStore(root / ".codex-mini" / "patches")
+            patch_store.save(proposal)
+            ws = FakeWebSocket()
+            dispatcher = WebSocketRequestDispatcher(ws, context)
+
+            handled = await dispatcher.handle_control_packet(
+                {
+                    "type": "reject_patch_review",
+                    "patch_id": "patch-direct-reject",
+                    "reason": "用户选择暂不应用",
+                    "request_id": "patch-reject-1",
+                    "turn_id": "turn-review",
+                }
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(target.read_text(encoding="utf-8"), "print('old')\n")
+            self.assertEqual(
+                [event["type"] for event in ws.sent],
+                ["tool_call_started", "tool_call_result", "patch_rejected"],
+            )
+            rejected = patch_store.load("patch-direct-reject")
+            self.assertEqual(rejected.status, PatchStatus.REJECTED)
+            self.assertEqual(rejected.metadata["reason"], "用户选择暂不应用")
+            self.assertEqual(ws.sent[2]["patch_id"], "patch-direct-reject")
+            self.assertEqual(ws.sent[2]["tool"], "reject_patch")
+
+    async def test_apply_patch_review_control_keeps_policy_recheck_on_protected_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / ".env"
+            target.write_text("TOKEN=old\n", encoding="utf-8")
+            context = WebSocketRuntimeContext.create(root, "system")
+            persist_websocket_session(context.session_store, context.session_id, context.workspace)
+            context.session_persisted = True
+            proposal = build_patch_proposal(
+                session_id=context.session_id,
+                turn_id="turn-preview",
+                cwd=root,
+                changes=[
+                    build_file_change(
+                        ".env",
+                        "TOKEN=old\n",
+                        "TOKEN=new\n",
+                        existed_before=True,
+                        exists_after=True,
+                    )
+                ],
+                patch_id="patch-protected-path",
+                summary="更新 .env",
+            )
+            patch_store = PatchStore(root / ".codex-mini" / "patches")
+            patch_store.save(proposal)
+            ws = FakeWebSocket()
+            dispatcher = WebSocketRequestDispatcher(ws, context)
+
+            handled = await dispatcher.handle_control_packet(
+                {
+                    "type": "apply_patch_review",
+                    "patch_id": "patch-protected-path",
+                    "request_id": "patch-apply-protected",
+                    "turn_id": "turn-review",
+                }
+            )
+
+            self.assertTrue(handled)
+            self.assertEqual(target.read_text(encoding="utf-8"), "TOKEN=old\n")
+            self.assertEqual(
+                [event["type"] for event in ws.sent],
+                ["tool_call_started", "tool_call_result", "patch_apply_failed"],
+            )
+            self.assertFalse(ws.sent[1]["ok"])
+            self.assertEqual(ws.sent[2]["patch_id"], "patch-protected-path")
+            self.assertEqual(patch_store.load("patch-protected-path").status, PatchStatus.FAILED)
+
     async def test_undo_file_restores_changed_file_and_consumes_baseline(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -943,8 +1403,12 @@ class WebSocketRequestDispatcherTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(handled)
             self.assertIsNotNone(context.pending_plan)
             self.assertEqual(context.pending_plan["content"], "实现 Plan Mode")
+            self.assertIn("计划书", context.pending_plan["plan_markdown"])
+            self.assertIn("分析需求", context.pending_plan["plan_markdown"])
             self.assertEqual(ws.sent[0]["type"], "plan_pending")
             self.assertEqual(ws.sent[0]["items"], plan_items)
+            self.assertIn("确认前不修改文件", ws.sent[0]["summary"])
+            self.assertIn("## Execution Plan", ws.sent[0]["plan_markdown"])
             self.assertEqual(ws.sent[0]["model"], "test-plan-model")
             with self.assertRaises(KeyError):
                 context.session_store.get_session(context.session_id)
@@ -1058,6 +1522,10 @@ class WebSocketRequestDispatcherTests(unittest.IsolatedAsyncioTestCase):
 [permissions]
 profile = "read_only"
 
+[tests]
+command = "python -m unittest discover -s tests"
+timeout = 23
+
 [[exec.rules]]
 action = "deny"
 prefix = ["npm", "publish"]
@@ -1086,6 +1554,11 @@ category = "publish_blocked"
                 self.assertEqual(context.workspace.project_policy.source, "runtime_mode")
                 self.assertEqual(context.runner.ctx.permission_profile, PermissionProfile.WORKSPACE_WRITE)
                 self.assertEqual(
+                    context.runner.ctx.default_test_command,
+                    "python -m unittest discover -s tests",
+                )
+                self.assertEqual(context.runner.ctx.default_test_timeout, 23)
+                self.assertEqual(
                     WorkspaceTrustStore(trust_path).trust_for(root).level,
                     TrustLevel.TRUSTED,
                 )
@@ -1101,6 +1574,10 @@ category = "publish_blocked"
                 self.assertTrue(handled)
                 self.assertEqual(context.workspace.project_policy.source, "project_config")
                 self.assertEqual(context.runner.ctx.permission_profile, PermissionProfile.READ_ONLY)
+                self.assertEqual(
+                    context.runner.ctx.default_test_command,
+                    "python -m unittest discover -s tests",
+                )
                 self.assertEqual(
                     context.runner.ctx.policy.check_command("npm publish").category,
                     "publish_blocked",
@@ -1745,6 +2222,193 @@ class TurnRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.ok)
         self.assertIn("核心后端", result.content)
         self.assertEqual([event["type"] for event in ws.sent], ["clarification_request", "clarification_response_ack"])
+
+    async def test_emit_tool_result_records_patch_lifecycle_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            store = SessionStore(project_root)
+            store.create_session(session_id="session-1")
+            change = build_file_change(
+                "README.md",
+                "old\n",
+                "new\n",
+                existed_before=True,
+                exists_after=True,
+            )
+            proposal = build_patch_proposal(
+                session_id="session-1",
+                turn_id="turn-1",
+                cwd=project_root,
+                changes=[change],
+                patch_id="patch-1",
+                summary="更新 README",
+            )
+            PatchStore(project_root / ".codex-mini" / "patches").save(proposal)
+            ws = FakeWebSocket()
+
+            await emit_tool_result(
+                ws,
+                store,
+                ToolResult(
+                    ok=True,
+                    content="preview",
+                    metadata={
+                        "patch_id": "patch-1",
+                        "patch_status": PatchStatus.PROPOSED.value,
+                        "before": "不应进入事件",
+                        "after": "不应进入事件",
+                    },
+                ),
+                SessionRuntimeState("session-1"),
+                "session-1",
+                "turn-1",
+                "request-1",
+                "write_file",
+            )
+
+            self.assertEqual([event["type"] for event in ws.sent], ["tool_call_result", "patch_proposed"])
+            patch_event = ws.sent[1]
+            self.assertEqual(patch_event["patch_id"], "patch-1")
+            self.assertEqual(patch_event["summary"], "更新 README")
+            self.assertEqual(patch_event["changed_paths"], ["README.md"])
+            self.assertIn("unified_diff", patch_event["changes"][0])
+            self.assertNotIn("before", patch_event["changes"][0])
+            self.assertNotIn("after", patch_event["changes"][0])
+            self.assertNotIn("before", patch_event["metadata"])
+            self.assertNotIn("after", patch_event["metadata"])
+
+            events = store.load_events("session-1")
+            self.assertEqual(events[-2].type, "tool_call_result")
+            self.assertEqual(events[-1].type, "patch_proposed")
+            self.assertEqual(events[-1].payload["patch_id"], "patch-1")
+
+    async def test_emit_tool_result_records_patch_rolled_back_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            store = SessionStore(project_root)
+            store.create_session(session_id="session-1")
+            proposal = build_patch_proposal(
+                session_id="session-1",
+                turn_id="turn-1",
+                cwd=project_root,
+                changes=[
+                    build_file_change(
+                        "README.md",
+                        "old\n",
+                        "new\n",
+                        existed_before=True,
+                        exists_after=True,
+                    )
+                ],
+                patch_id="patch-rollback-1",
+                summary="更新 README",
+            ).with_state(status=PatchStatus.ROLLED_BACK, rolled_back=True)
+            PatchStore(project_root / ".codex-mini" / "patches").save(proposal)
+            ws = FakeWebSocket()
+
+            await emit_tool_result(
+                ws,
+                store,
+                ToolResult(
+                    ok=True,
+                    content="rolled back",
+                    metadata={
+                        "patch_id": "patch-rollback-1",
+                        "patch_status": PatchStatus.ROLLED_BACK.value,
+                    },
+                ),
+                SessionRuntimeState("session-1"),
+                "session-1",
+                "turn-2",
+                "request-2",
+                "rollback_patch",
+            )
+
+            self.assertEqual([event["type"] for event in ws.sent], ["tool_call_result", "patch_rolled_back"])
+            self.assertEqual(ws.sent[1]["patch_id"], "patch-rollback-1")
+            self.assertEqual(store.load_events("session-1")[-1].type, "patch_rolled_back")
+
+    async def test_patch_approval_request_event_uses_stored_proposal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            store = SessionStore(project_root)
+            store.create_session(session_id="session-1")
+            proposal = build_patch_proposal(
+                session_id="session-1",
+                turn_id="turn-1",
+                cwd=project_root,
+                changes=[
+                    build_file_change(
+                        "app.py",
+                        "print('old')\n",
+                        "print('new')\n",
+                        existed_before=True,
+                        exists_after=True,
+                    )
+                ],
+                patch_id="patch-approval-1",
+                summary="更新 app.py",
+            )
+            PatchStore(project_root / ".codex-mini" / "patches").save(proposal)
+            ws = FakeWebSocket()
+
+            await _emit_patch_approval_request_event(
+                ws,
+                store,
+                session_id="session-1",
+                turn_id="turn-1",
+                request_id="request-apply",
+                tool_name="apply_patch",
+                arguments='{"patch_id": "patch-approval-1"}',
+                metadata={"permission_action": "ask", "before": "不应进入事件"},
+            )
+
+            self.assertEqual([event["type"] for event in ws.sent], ["patch_approval_request"])
+            self.assertEqual(ws.sent[0]["patch_id"], "patch-approval-1")
+            self.assertEqual(ws.sent[0]["patch_status"], PatchStatus.PROPOSED.value)
+            self.assertEqual(ws.sent[0]["tool"], "apply_patch")
+            self.assertEqual(ws.sent[0]["metadata"]["action"], "apply")
+            self.assertNotIn("before", ws.sent[0]["metadata"])
+            self.assertEqual(store.load_events("session-1")[-1].type, "patch_approval_request")
+
+    async def test_patch_approval_request_event_marks_rollback_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            store = SessionStore(project_root)
+            store.create_session(session_id="session-1")
+            proposal = build_patch_proposal(
+                session_id="session-1",
+                turn_id="turn-1",
+                cwd=project_root,
+                changes=[
+                    build_file_change(
+                        "app.py",
+                        "print('old')\n",
+                        "print('new')\n",
+                        existed_before=True,
+                        exists_after=True,
+                    )
+                ],
+                patch_id="patch-rollback-approval",
+                summary="更新 app.py",
+            ).with_state(status=PatchStatus.APPLIED, applied_at=1.0)
+            PatchStore(project_root / ".codex-mini" / "patches").save(proposal)
+            ws = FakeWebSocket()
+
+            await _emit_patch_approval_request_event(
+                ws,
+                store,
+                session_id="session-1",
+                turn_id="turn-2",
+                request_id="request-rollback",
+                tool_name="rollback_patch",
+                arguments='{"patch_id": "patch-rollback-approval"}',
+                metadata={"permission_action": "ask"},
+            )
+
+            self.assertEqual([event["type"] for event in ws.sent], ["patch_approval_request"])
+            self.assertEqual(ws.sent[0]["patch_id"], "patch-rollback-approval")
+            self.assertEqual(ws.sent[0]["metadata"]["action"], "rollback")
 
 
 if __name__ == "__main__":

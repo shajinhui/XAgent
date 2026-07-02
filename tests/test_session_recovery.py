@@ -46,13 +46,13 @@ class SessionRecoveryTests(unittest.TestCase):
                     "request_id": "call-1",
                     "tool": "read_file",
                     "ok": True,
-                    "content": "# Codex-mini",
+                    "content": "# XCode",
                 },
             )
             store.append_event(
                 record.session_id,
                 "assistant_message",
-                {"turn_id": "turn-1", "content": "README 说明这是 Codex-mini。"},
+                {"turn_id": "turn-1", "content": "README 说明这是 XCode。"},
             )
 
             messages = recover_session_messages(store, record.session_id, "system prompt")
@@ -68,12 +68,12 @@ class SessionRecoveryTests(unittest.TestCase):
                     "role": "tool",
                     "tool_call_id": "call-1",
                     "name": "read_file",
-                    "content": "# Codex-mini",
+                    "content": "# XCode",
                 },
             )
             self.assertEqual(
                 messages[4],
-                {"role": "assistant", "content": "README 说明这是 Codex-mini。"},
+                {"role": "assistant", "content": "README 说明这是 XCode。"},
             )
 
     def test_recover_messages_restores_confirmed_plan_context(self) -> None:
@@ -87,6 +87,7 @@ class SessionRecoveryTests(unittest.TestCase):
                         "content": "实现 Plan Mode",
                         "accepted_plan": {
                             "plan_id": "plan-1",
+                            "plan_markdown": "# 计划书\n\n## Execution Plan\n1. 分析需求\n2. 实现改动",
                             "items": [
                                 {"step": "分析需求", "status": "in_progress"},
                                 {"step": "实现改动", "status": "pending"},
@@ -100,9 +101,10 @@ class SessionRecoveryTests(unittest.TestCase):
 
         self.assertEqual(messages[1]["role"], "user")
         self.assertIn("## 用户原始请求", messages[1]["content"])
-        self.assertIn("## 已确认执行计划", messages[1]["content"])
-        self.assertIn("1. [in_progress] 分析需求", messages[1]["content"])
-        self.assertIn("2. [pending] 实现改动", messages[1]["content"])
+        self.assertIn("## 已确认计划", messages[1]["content"])
+        self.assertIn("# 计划书", messages[1]["content"])
+        self.assertIn("1. 分析需求", messages[1]["content"])
+        self.assertIn("2. 实现改动", messages[1]["content"])
 
     def test_recover_messages_marks_failed_tools_with_error_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

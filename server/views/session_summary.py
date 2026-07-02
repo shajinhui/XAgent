@@ -27,7 +27,7 @@ def summarize_session_record(
     title = record.title or _derive_session_title(events)
     last_message = _derive_last_user_message(events)
     last_message_at = _last_model_message_timestamp(events) or record.updated_at
-    return {
+    summary = {
         "session_id": record.session_id,
         "title": title,
         "created_at": record.created_at,
@@ -36,6 +36,10 @@ def summarize_session_record(
         "message_count": _count_model_messages(events),
         "last_message": last_message,
     }
+    workspace = _session_workspace_snapshot(record)
+    if workspace is not None:
+        summary["workspace"] = workspace
+    return summary
 
 
 def session_display_messages(events: List[TranscriptEvent]) -> List[Dict[str, Any]]:
@@ -64,6 +68,30 @@ def session_display_messages(events: List[TranscriptEvent]) -> List[Dict[str, An
 
     _finish_activity_groups(activity_groups)
     return messages
+
+
+def pending_patch_review_event(events: List[TranscriptEvent]) -> Dict[str, Any] | None:
+    """从 transcript 中恢复最新仍待处理的 patch review 事件。"""
+
+    latest_by_patch: dict[str, tuple[int, TranscriptEvent]] = {}
+    for index, event in enumerate(events):
+        if event.type not in _PATCH_LIFECYCLE_EVENT_TYPES:
+            continue
+        patch_id = str(event.payload.get("patch_id") or "").strip()
+        if not patch_id:
+            continue
+        latest_by_patch[patch_id] = (index, event)
+
+    pending_events = [
+        (index, event)
+        for index, event in latest_by_patch.values()
+        if event.type in _PENDING_PATCH_REVIEW_EVENT_TYPES
+    ]
+    if not pending_events:
+        return None
+
+    _index, event = max(pending_events, key=lambda item: item[0])
+    return _patch_review_event_payload(event)
 
 
 def _display_message_for_event(event: TranscriptEvent) -> Dict[str, Any] | None:
@@ -130,6 +158,7 @@ def _is_activity_event(event: TranscriptEvent) -> bool:
         "permission_request",
         "permission_decision",
         "tool_call_result",
+        *_PATCH_LIFECYCLE_EVENT_TYPES,
     }
 
 
@@ -242,6 +271,11 @@ def _activity_event_message(activity_key: str, event: TranscriptEvent) -> Dict[s
         status = "success" if ok else "error"
         kind = _tool_kind(tool_name)
         detail = str(payload.get("content") or "").strip()
+    elif event.type in _PATCH_LIFECYCLE_EVENT_TYPES:
+        label = _format_patch_lifecycle_label(event.type, payload)
+        status = _patch_lifecycle_status(event.type)
+        kind = "permission" if event.type == "patch_approval_request" else "edit"
+        detail = _format_patch_lifecycle_detail(payload)
     else:
         return None
 
@@ -273,6 +307,8 @@ def _tool_kind(tool_name: str) -> str:
         return "read"
     if tool_name in {"write_file", "edit_file"}:
         return "edit"
+    if tool_name in {"apply_patch", "reject_patch", "rollback_patch"}:
+        return "edit"
     if tool_name == "run_command":
         return "command"
     if tool_name == "web_fetch":
@@ -292,6 +328,12 @@ def _format_tool_start_label(tool_name: str, raw_arguments: Any) -> str:
         return f"正在读取 {path}" if path else "正在读取文件"
     if tool_name in {"write_file", "edit_file"}:
         return f"正在编辑 {path}" if path else "正在编辑文件"
+    if tool_name == "apply_patch":
+        return "正在准备应用 Patch"
+    if tool_name == "reject_patch":
+        return "正在准备拒绝 Patch"
+    if tool_name == "rollback_patch":
+        return "正在准备回滚 Patch"
     if tool_name == "run_command":
         return "正在准备运行命令"
     if tool_name == "web_fetch":
@@ -308,6 +350,9 @@ def _format_tool_result_label(tool_name: str, ok: bool) -> str:
             "read_file": "读取失败",
             "write_file": "编辑失败",
             "edit_file": "编辑失败",
+            "apply_patch": "Patch 应用失败",
+            "reject_patch": "Patch 拒绝失败",
+            "rollback_patch": "Patch 回滚失败",
             "run_command": "命令失败",
             "web_fetch": "获取失败",
         }.get(tool_name, f"工具失败：{tool_name}")
@@ -317,9 +362,203 @@ def _format_tool_result_label(tool_name: str, ok: bool) -> str:
         "read_file": "已读取 1 个文件",
         "write_file": "已编辑 1 个文件",
         "edit_file": "已编辑 1 个文件",
+        "apply_patch": "Patch 已应用",
+        "reject_patch": "Patch 已拒绝",
+        "rollback_patch": "Patch 已回滚",
         "run_command": "已运行 1 条命令",
         "web_fetch": "已获取 1 个网页",
     }.get(tool_name, f"已完成 {tool_name}")
+
+
+def _format_patch_lifecycle_label(event_type: str, payload: Dict[str, Any]) -> str:
+    """把 patch lifecycle 事件恢复成与实时前端一致的摘要。"""
+
+    patch_id = _short_patch_id(payload.get("patch_id"))
+    if event_type == "patch_proposed" and _payload_metadata(payload).get("rolled_back") is True:
+        return f"Patch 已回滚并恢复待审查：{patch_id}"
+    if event_type == "patch_proposed" and _payload_metadata(payload).get("partial_apply") is True:
+        return f"Patch 已更新：{patch_id}"
+    return {
+        "patch_proposed": f"Patch 已生成：{patch_id}",
+        "patch_approval_request": f"等待 Patch 审批：{patch_id}",
+        "patch_applied": f"Patch 已应用：{patch_id}",
+        "patch_rejected": f"Patch 已拒绝：{patch_id}",
+        "patch_apply_failed": f"Patch 应用失败：{patch_id}",
+        "patch_rolled_back": f"Patch 已回滚：{patch_id}",
+    }.get(event_type, f"Patch 状态更新：{patch_id}")
+
+
+def _patch_lifecycle_status(event_type: str) -> str:
+    """把 patch lifecycle 类型映射为 activity 状态。"""
+
+    if event_type == "patch_approval_request":
+        return "waiting"
+    if event_type == "patch_apply_failed":
+        return "error"
+    return "success"
+
+
+def _format_patch_lifecycle_detail(payload: Dict[str, Any]) -> str | None:
+    """恢复 patch lifecycle 详情，只展示 diff 摘要和路径，不展示 before/after 全量快照。"""
+
+    details: list[str] = []
+    summary = str(payload.get("summary") or "").strip()
+    if summary:
+        details.append(summary)
+
+    stat_parts: list[str] = []
+    additions = payload.get("additions")
+    deletions = payload.get("deletions")
+    if isinstance(additions, int):
+        stat_parts.append(f"+{additions}")
+    if isinstance(deletions, int):
+        stat_parts.append(f"-{deletions}")
+    if stat_parts:
+        details.append(" / ".join(stat_parts))
+
+    changed_paths = payload.get("changed_paths")
+    if isinstance(changed_paths, list):
+        paths = [str(path) for path in changed_paths[:8] if str(path).strip()]
+        if paths:
+            details.append("\n".join(f"- {path}" for path in paths))
+
+    failure_detail = _format_patch_failure_detail(_payload_metadata(payload))
+    if failure_detail:
+        details.append(failure_detail)
+
+    return "\n".join(details) if details else None
+
+
+def _format_patch_failure_detail(metadata: Dict[str, Any]) -> str | None:
+    """恢复 patch 失败诊断摘要，帮助历史会话看清已写入/未触及状态。"""
+
+    details: list[str] = []
+    stage = _format_patch_failure_stage(metadata.get("failure_stage"))
+    if stage:
+        details.append(f"失败阶段: {stage}")
+
+    written_paths = _string_list(metadata.get("written_paths"))
+    if written_paths:
+        details.append("已写入:")
+        details.append("\n".join(f"- {path}" for path in written_paths))
+
+    failed_path = str(metadata.get("failed_path") or "").strip()
+    if failed_path:
+        details.append("失败文件:")
+        details.append(f"- {failed_path}")
+        if metadata.get("partially_written") is True:
+            details.append("提示: 失败文件可能已经部分写入。")
+
+    remaining_paths = _string_list(metadata.get("remaining_paths"))
+    if remaining_paths:
+        details.append("未触及:")
+        details.append("\n".join(f"- {path}" for path in remaining_paths))
+
+    return "\n".join(details) if details else None
+
+
+def _format_patch_failure_stage(value: Any) -> str | None:
+    """把失败阶段转换为更易读的文案。"""
+
+    stage = str(value or "").strip()
+    if not stage:
+        return None
+    return {
+        "validate": "校验",
+        "rollback_validate": "回滚校验",
+        "preflight": "Git 预检",
+        "write": "写入",
+    }.get(stage, stage)
+
+
+_PATCH_LIFECYCLE_EVENT_TYPES = frozenset(
+    {
+        "patch_proposed",
+        "patch_approval_request",
+        "patch_applied",
+        "patch_rejected",
+        "patch_apply_failed",
+        "patch_rolled_back",
+    }
+)
+_PENDING_PATCH_REVIEW_EVENT_TYPES = frozenset(
+    {
+        "patch_proposed",
+        "patch_approval_request",
+        "patch_apply_failed",
+    }
+)
+
+
+def _patch_review_event_payload(event: TranscriptEvent) -> Dict[str, Any]:
+    """把 transcript 中的 patch lifecycle payload 还原成前端卡片可消费的结构。"""
+
+    payload = event.payload
+    return {
+        "type": event.type,
+        "session_id": event.session_id,
+        "turn_id": str(payload.get("turn_id") or "").strip(),
+        "request_id": str(payload.get("request_id") or "").strip(),
+        "timestamp": event.timestamp,
+        "tool": str(payload.get("tool") or "patch"),
+        "patch_id": str(payload.get("patch_id") or "").strip(),
+        "patch_status": str(payload.get("patch_status") or "").strip(),
+        "summary": payload.get("summary"),
+        "changed_paths": _string_list(payload.get("changed_paths")),
+        "additions": payload.get("additions") if isinstance(payload.get("additions"), int) else None,
+        "deletions": payload.get("deletions") if isinstance(payload.get("deletions"), int) else None,
+        "changes": [_safe_patch_change(change) for change in _dict_list(payload.get("changes"))],
+        "metadata": _safe_patch_metadata(payload.get("metadata")),
+    }
+
+
+def _safe_patch_change(change: Dict[str, Any]) -> Dict[str, Any]:
+    """恢复 patch change 展示字段，避免把 before/after 快照重新暴露给前端。"""
+
+    return {
+        "path": str(change.get("path") or ""),
+        "change_type": str(change.get("change_type") or "update"),
+        "unified_diff": str(change.get("unified_diff") or ""),
+        "additions": change.get("additions") if isinstance(change.get("additions"), int) else 0,
+        "deletions": change.get("deletions") if isinstance(change.get("deletions"), int) else 0,
+        "move_path": change.get("move_path") if isinstance(change.get("move_path"), str) else None,
+    }
+
+
+def _safe_patch_metadata(value: Any) -> Dict[str, Any]:
+    """过滤 patch metadata 中不应进入生命周期事件的全文字段。"""
+
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key: metadata_value
+        for key, metadata_value in value.items()
+        if key not in {"patch_id", "patch_status", "before", "after", "content"}
+    }
+
+
+def _payload_metadata(payload: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = payload.get("metadata")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]
+
+
+def _dict_list(value: Any) -> list[Dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _short_patch_id(value: Any) -> str:
+    """压缩 patch_id，历史时间线里展示完整 UUID 会过长。"""
+
+    patch_id = str(value or "").strip()
+    return patch_id[:8] if patch_id else "patch"
 
 
 def _parse_arguments(value: Any) -> Dict[str, Any]:
@@ -361,15 +600,59 @@ def _format_elapsed_time(started_at: float, finished_at: float) -> str:
     return f"{minutes}m {seconds}s"
 
 
-def list_session_summaries(store: SessionStore, limit: int = 20) -> List[Dict[str, Any]]:
+def list_session_summaries(
+    store: SessionStore,
+    limit: int = 20,
+    *,
+    workspace: Any | None = None,
+) -> List[Dict[str, Any]]:
     """列出有真实对话内容的 session，避免空会话进入历史列表。"""
 
     safe_limit = max(1, min(limit, 50))
     summaries: List[Dict[str, Any]] = []
-    for record in store.list_sessions(limit=safe_limit, with_turns=True):
+    query_limit = None if workspace is not None else safe_limit
+    for record in store.list_sessions(limit=query_limit, with_turns=True):
+        if workspace is not None and not _record_belongs_to_workspace(record, workspace):
+            continue
         summaries.append(summarize_session_record(record, store.load_events(record.session_id)))
+        if len(summaries) >= safe_limit:
+            break
     summaries.sort(key=lambda summary: (summary["updated_at"], summary["session_id"]), reverse=True)
     return summaries[:safe_limit]
+
+
+def _session_workspace_snapshot(record: SessionRecord) -> Dict[str, Any] | None:
+    """读取 session 创建时保存的 workspace 快照。"""
+
+    metadata = record.metadata or {}
+    workspace = metadata.get("workspace")
+    if not isinstance(workspace, dict):
+        return None
+    selected_root = workspace.get("selected_root")
+    project_root = workspace.get("project_root")
+    if not isinstance(selected_root, str) or not selected_root.strip():
+        return None
+    if not isinstance(project_root, str) or not project_root.strip():
+        return None
+    return workspace
+
+
+def _record_belongs_to_workspace(record: SessionRecord, workspace: Any) -> bool:
+    """按 selected_root + project_root 过滤，避免同一 store 里的会话串台。"""
+
+    snapshot = _session_workspace_snapshot(record)
+    if snapshot is None:
+        return False
+
+    selected_root = getattr(workspace, "selected_root", None)
+    project_root = getattr(workspace, "project_root", None)
+    if selected_root is None or project_root is None:
+        return False
+
+    return (
+        snapshot.get("selected_root") == selected_root.as_posix()
+        and snapshot.get("project_root") == project_root.as_posix()
+    )
 
 
 def _derive_session_title(events: List[TranscriptEvent]) -> str:

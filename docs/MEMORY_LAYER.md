@@ -115,6 +115,7 @@ state = extract_task_state(events)
 生成当前会话摘要并保存到 memory。
 
 **请求**:
+
 ```json
 {
   "type": "summarize_session",
@@ -123,6 +124,7 @@ state = extract_task_state(events)
 ```
 
 **响应**:
+
 ```json
 {
   "type": "session_summarized",
@@ -139,6 +141,7 @@ state = extract_task_state(events)
 列出当前 workspace 的 memory。
 
 **请求**:
+
 ```json
 {
   "type": "list_memory",
@@ -148,6 +151,7 @@ state = extract_task_state(events)
 ```
 
 **响应**:
+
 ```json
 {
   "type": "memory_list",
@@ -171,6 +175,7 @@ state = extract_task_state(events)
 删除指定 memory。
 
 **请求**:
+
 ```json
 {
   "type": "forget_memory",
@@ -181,6 +186,7 @@ state = extract_task_state(events)
 ```
 
 **响应**:
+
 ```json
 {
   "type": "memory_deleted",
@@ -196,6 +202,7 @@ state = extract_task_state(events)
 显式记录用户偏好到用户级 memory。当前不会从普通对话中自动抽取偏好。
 
 **请求**:
+
 ```json
 {
   "type": "remember_preference",
@@ -205,6 +212,7 @@ state = extract_task_state(events)
 ```
 
 **响应**:
+
 ```json
 {
   "type": "preference_remembered",
@@ -220,6 +228,7 @@ state = extract_task_state(events)
 按关键词搜索当前 workspace 的 memory 索引和 session/task 明细。
 
 **请求**:
+
 ```json
 {
   "type": "search_memory",
@@ -229,6 +238,7 @@ state = extract_task_state(events)
 ```
 
 **响应**:
+
 ```json
 {
   "type": "memory_search_results",

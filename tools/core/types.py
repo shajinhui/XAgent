@@ -55,4 +55,9 @@ class ToolExecutionContext:
     approval_policy: ApprovalPolicy
     circuit_breaker: CircuitBreaker
     command_executor: SecureMacOSSandboxExecutor
+    turn_id: str | None = None
     diff_tracker: Any | None = None
+    skill_resource_resolver: Any | None = None
+    default_test_command: str | None = None
+    default_test_source: str | None = None
+    default_test_timeout: int = 60

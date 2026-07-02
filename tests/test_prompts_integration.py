@@ -20,7 +20,7 @@ class TestPromptsIntegration(unittest.TestCase):
         prompt = builder.build(config)
 
         # 验证关键内容存在
-        self.assertIn("Codex-mini", prompt)
+        self.assertIn("XCode", prompt)
         self.assertIn("# Shell 命令工具", prompt)
         self.assertIn("# 文件操作工具", prompt)
         self.assertIn("# Git 工具", prompt)
@@ -55,7 +55,7 @@ class TestPromptsIntegration(unittest.TestCase):
 
         # 但都包含核心身份
         for prompt in [default_prompt, friendly_prompt, pragmatic_prompt]:
-            self.assertIn("Codex-mini", prompt)
+            self.assertIn("XCode", prompt)
 
     def test_with_workspace_context(self):
         """验证可以添加工作空间上下文。"""
@@ -66,7 +66,7 @@ class TestPromptsIntegration(unittest.TestCase):
         prompt = builder.build(config, workspace_context=workspace_context)
 
         self.assertIn(workspace_context, prompt)
-        self.assertIn("Codex-mini", prompt)
+        self.assertIn("XCode", prompt)
 
     def test_tools_optional(self):
         """验证工具指引可选。"""

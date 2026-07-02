@@ -252,7 +252,7 @@ def main() -> None:
     # 初始化消息队列，首条为 system
     messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
 
-    print("Codex-mini 终端版已启动，输入 quit 退出。")
+    print("XCode 终端版已启动，输入 quit 退出。")
     while True:
         # 读取用户输入（在终端中）并去除首尾空白
         user_input = input("\n你: ").strip()

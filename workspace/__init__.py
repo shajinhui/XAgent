@@ -6,6 +6,7 @@ from workspace.instructions import (
     ProjectInstructions,
     load_project_instructions,
     render_system_prompt_with_project_instructions,
+    resolve_workspace_test_defaults,
 )
 from workspace.models import (
     AdditionalRoot,
@@ -36,4 +37,5 @@ __all__ = [
     "load_project_instructions",
     "load_project_policy",
     "render_system_prompt_with_project_instructions",
+    "resolve_workspace_test_defaults",
 ]

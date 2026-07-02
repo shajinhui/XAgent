@@ -1,10 +1,10 @@
 # 当前项目架构状况
 
-本文档记录 Codex-mini 当前阶段的项目架构、模块职责、运行链路、已完成能力和仍待收口事项。若本文件与根目录 `AGENTS.md` 的项目状态描述不一致，应同步更新两者。
+本文档记录 XCode 当前阶段的项目架构、模块职责、运行链路、已完成能力和仍待收口事项。若本文件与根目录 `AGENTS.md` 的项目状态描述不一致，应同步更新两者。
 
 ## 项目定位
 
-Codex-mini 是一个 Python 版 Codex 类本地 Agent 学习项目，目前正处于阶段 2：从单体工具函数升级为可扩展的 Agent 工具运行时，并逐步走向本地桌面客户端 + Python runtime 的形态。
+XCode 是一个 Python 版 Codex 类本地 Agent 学习项目，目前正处于阶段 2：从单体工具函数升级为可扩展的 Agent 工具运行时，并逐步走向本地桌面客户端 + Python runtime 的形态。
 
 当前状态可以概括为：
 
@@ -15,9 +15,13 @@ Codex-mini 是一个 Python 版 Codex 类本地 Agent 学习项目，目前正�
 - FastAPI WebSocket 服务已经作为本地事件传输原型接入，但它的最终角色应是桌面客户端/IDE 扩展的 runtime bridge。
 - WebSocket runtime contract 已有第一版：schema version、session state、真实 streaming、权限确认重试、session 挂起/阻断/恢复、session 创建/列表/磁盘恢复、基于首条用户提问的模型标题。
 - 会话持久化已有第一版：`.codex-mini/sessions/index.sqlite` 作为索引，`transcripts/*.jsonl` 作为 append-only 事件流。
+- 透明文件型 Memory 已有第一片：`memory/` 提供 Session/Task Memory 存储、transcript 摘要、任务状态提取、索引和关键词搜索；WebSocket 支持显式 summarize/list/search/forget/remember preference，并会在离开已持久化活动会话时自动生成摘要。当前尚未把 durable memory 自动注入模型 prompt，实验性的偏好 learner 也没有接入写入链路。
 - workspace 后端骨架已有第一版：验证用户选择的工作区目录，并在 `open_workspace` 时重建 session store、tool registry 和 workspace payload。
+- Skills 可扩展 MVP 已有第一版：`skills/` 作为独立上下文能力层，支持本地 repo/user 文件型 skills，系统提示只展示 bounded catalog metadata，完整 `SKILL.md` 与相对资源通过受限只读 wrapper 按需读取；桌面端可通过显式用户控制事件新增、导入、GitHub 安装/重新安装、从 curated registry 安装、从 registry 可更新条目直接触发重新安装、编辑和删除 repo/user skills，并管理标准资源目录内的 skill resource 文件；本地 skill package spec/validator、标准 package 创建模板、authoring guide、validator-covered 示例包、安装来源记录、GitHub token header、`version` / `metadata.icon` catalog 字段、registry 已安装标记、`update_available` 提示和 `dependencies.tools` 展示检查，以及 `openai/skills` curated registry loader 已开始落地。
+- Stage 4 patch review 已按 `v0.4.0 Change Review Runtime` 收口：`patch/` 提供 patch proposal 模型、unified diff 构造、add/update/delete 统计、状态转换和透明 JSON 存储；`write_file` 与 `edit_file` 的 `dry_run=true` 都会生成 pending proposal；`tools/patching/` 提供 `apply_patch` / `reject_patch` / `rollback_patch`，通过普通工具审批路径应用、拒绝或回滚 stored proposal，并支持 selected file subset。WebSocket patch lifecycle events 已接入 proposed / approval request / applied / rejected / failed / rolled_back 状态，并写入 transcript；桌面端当前已有最小 live `PatchReviewCard.vue` 负责 pending review，也新增 `PatchResultCard.vue` 展示独立 patch 测试历史。Stage 4.5 read-only Git review tools 已接入 `git_status`、`git_diff`、`git_diff_file` 和 `git_changed_files`；Stage 4.6 已让 `apply_patch` 支持显式 `test_command`、trusted config `[tests]` 和 AGENTS.md 默认测试命令，测试结果关联 `patch_id` 和本次 changed paths 写入 metadata / patch store，并进入桌面 activity / system message / result card 展示；Stage 4.7 已让 patch proposal 记录 `original_changes` / `applied_changes`、durable rollback 元数据，以及 apply / rollback 过程中的 partially-written diagnostics，因此 partial apply 后也能按 `patch_id` durable rollback，并在失败时保留可追踪的 `written_paths` / `rolled_back_paths`、`failed_path` 和 `remaining_paths`；同时 `.git`、`.codex-mini`、`.venv`、`__pycache__` 的 apply / rollback 拒绝回归测试、`move_path` / rename + protected path 组合回归测试、`cross-root move_path`、多文件 simultaneous cross-root move、multiple writable additional roots 组合、rename + apply/rollback failure diagnostics、partial-apply rollback-failure state reconciliation、多文件 `partial apply + cross-root move_path` 回归测试、跨多 roots 的失败诊断链路，以及 `additional root` read/write 与 `additional root + symlink/binary` 组合测试也已补上，并修复了 macOS external additional root 会被父级 symlink 误判为非法 patch 路径的问题。
 - `run_command.cwd` 已有第一版：命令可以在 workspace 内部子目录执行，但 cwd 不会扩大 sandbox 写入边界。
 - workspace/permission 专题架构已有目标文档，且 `WorkspaceContext v2`、统一 filesystem policy、network policy、policy-driven Seatbelt、prefix exec policy、permission mode 和 trust-gated project config 第一片已落地：`selected_root`、`project_root`、`current_dir`、session-only/trusted trust model、additional root model、workspace snapshot、`PermissionMode`、`FileSystemPolicy`、`PermissionProfile`、`ApprovalPolicy`、`NetworkPolicy` 和 `ExecPolicy` 已进入代码。
+- Stage 5 `Permission Mode / Sandbox Policy Lite` 第一片已落地：保留现有 `request_approval` / `auto_approve` / `full_access` / `custom` 模式；权限弹窗会展示原因、cwd、permission profile、网络/沙箱状态和建议的 session prefix；composer 与权限弹窗会明确提示 `full_access` 风险；非 macOS、Seatbelt 缺失和嵌套沙箱失败也有可理解的错误说明。persistent allowlist、策略编辑器、domain network rules 和 Git commit/PR 自动化仍不在本片范围内。
 - `server/` 已从单体 WebSocket 文件开始拆分：`protocol/` 负责事件协议，`runtime/` 负责模型请求、streaming 和 session 状态，`processors/` 负责业务处理器，`views/` 负责给客户端展示的投影数据。
 - 桌面客户端已经进入 Electron/Vue 本地 runtime client 方向，负责聊天、审批、Markdown 渲染、历史会话、工作区打开和会话操作。
 - 已建立基础 `unittest` 测试，覆盖安全策略、工具注册表、WebSocket 事件、会话存储和恢复。
@@ -28,12 +32,17 @@ Codex-mini 是一个 Python 版 Codex 类本地 Agent 学习项目，目前正�
 
 - `server/app.py` 不再承担全部 WebSocket 业务细节，核心逻辑已经下沉到 `server/protocol/`、`server/runtime/`、`server/processors/`、`server/views/`。
 - `tools/` 已拆成 core runtime 与领域工具包，工具 metadata、approval metadata、runner、router 和 catalog 都有独立边界。
+- `skills/` 已作为独立上下文域落地，不放入 `tools/`；`tools/skills/` 只提供受限读取 wrapper，不承载 catalog/selection/resource/management 的核心逻辑。
+- `patch/` 已作为 Stage 4 修改审查域的后端底座单独落地，不混入 filesystem tools、WebSocket transport 或 session store。
+- `memory/` 已作为透明文件型记忆域落地，存储、摘要、索引和搜索不混入 transcript store 或 model runtime；自动 prompt 注入仍是后续边界。
+- `tools/patching/` 只承载 apply/reject 这类模型可调用动作，proposal 模型、diff 生成和存储仍归 `patch/`。
 - `session/`、`workspace/`、`security/`、`sandbox/` 已经成为可继续演进的后端域模块。
 
 后续实现必须继续遵守这些架构约束：
 
 - 不写旧协议、旧 schema、过渡 payload 的兼容性胶水代码，除非先明确提出并获得批准的迁移方案。
 - 遵循最小职责原则：一个模块只承担一个清晰职责，新逻辑必须放到拥有该职责的领域模块，不能混进 transport、UI、持久化或 policy 层。
+- Stage 3 应采用 AGENTS.md-first：项目上下文主要来自 `AGENTS.md` 分层指令和现有 workspace/env 边界；不要新增 project profile 持久化、root marker hints、git summary 预计算或启动时全仓扫描。
 - 保持边界清晰：request dispatcher、model runtime、session store、workspace policy、desktop presentation 之间通过明确接口协作，不直接依赖彼此内部细节。
 - 不用“先跑起来”的临时耦合替代架构设计；如果一个改动需要跨多个边界，应优先拆成小切片落地。
 
@@ -52,7 +61,7 @@ workspace/permission 已经开始 v2 落地，目前完成了 workspace 身份�
 - `workspace/instructions.py` 会从 `project_root` 到 `current_dir` 分层加载 `AGENTS.md`，且不会越过项目根去读取 external additional root 的项目文档。
 - 命令策略已拆到 `security/exec_policy.py`，支持 prefix allow/ask/deny、session allow、危险命令拒绝和 prefix suggestion。
 - `permission_decision` transcript 事件会记录批准时的 workspace snapshot；恢复 session 时只会恢复与当前 workspace 安全边界一致的 session allow prefix，`policy.permission_mode` 由当前全局 runtime preference 重新应用，不参与 allowlist 匹配。
-- `workspace/trust.py` 与 `workspace/project_config.py` 已提供第一版 trust gate：默认 `session_only` 不加载 `.codex-mini/config.toml`，trusted project 才能加载白名单 permission / exec policy 配置，敏感字段和过宽 allow rule 会被拒绝。
+- `workspace/trust.py` 与 `workspace/project_config.py` 已提供第一版 trust gate：默认 `session_only` 不加载 `.codex-mini/config.toml`，trusted project 才能加载白名单 permission / exec policy / tests 配置，敏感字段、过宽 allow rule 和危险测试命令会被拒绝。
 - WebSocket runtime 已提供 `trust_workspace` / `untrust_workspace` 控制事件，显式更新用户侧 trust store，刷新 workspace policy，并通过 `workspace_policy_changed` 通知前端。
 - 桌面标题栏已展示当前 workspace trust level，并提供最小 trust/untrust 操作入口。
 - `sandbox/macos_executor.py` 已按 filesystem/network policy 生成第一版 Seatbelt profile，不再使用固定写入模板；显式 `full_access` 模式会绕过 Seatbelt 并开启命令网络。
@@ -75,8 +84,16 @@ workspace/permission 已经开始 v2 落地，目前完成了 workspace 身份�
 │   └── user_context.py
 ├── context_manager/
 │   ├── history.py
+│   ├── plan_context.py
 │   ├── truncation.py
 │   └── updates.py
+├── memory/
+│   ├── models.py
+│   ├── store.py
+│   ├── summarizer.py
+│   ├── indexer.py
+│   ├── search.py
+│   └── learner.py
 ├── tools/
 │   ├── __init__.py
 │   ├── core/
@@ -97,9 +114,33 @@ workspace/permission 已经开始 v2 落地，目前完成了 workspace 身份�
 │   │   └── run_command.py
 │   ├── network/
 │   │   └── web_fetch.py
+│   ├── git/
+│   │   └── review.py
+│   ├── patching/
+│   │   └── patch_review.py
+│   ├── skills/
+│   │   ├── read_skill.py
+│   │   └── read_skill_resource.py
 │   └── interaction/
 │       ├── ask_user.py
 │       └── ask_user_spec.py
+├── patch/
+│   ├── models.py
+│   ├── diff_builder.py
+│   └── store.py
+├── skills/
+│   ├── models.py
+│   ├── dependencies.py
+│   ├── installer.py
+│   ├── registry.py
+│   ├── spec.py
+│   ├── validator.py
+│   ├── loader.py
+│   ├── manager.py
+│   ├── management.py
+│   ├── render.py
+│   ├── selection.py
+│   └── resources.py
 ├── security/
 │   ├── __init__.py
 │   ├── policy.py
@@ -122,6 +163,7 @@ workspace/permission 已经开始 v2 落地，目前完成了 workspace 身份�
 │   │   └── websocket_context.py
 │   ├── processors/
 │   │   ├── request_dispatcher.py
+│   │   ├── skill_processor.py
 │   │   └── title_processor.py
 │   └── views/
 │       └── session_summary.py
@@ -147,7 +189,10 @@ workspace/permission 已经开始 v2 落地，目前完成了 workspace 身份�
 │   ├── test_session_store.py
 │   └── test_tool_registry.py
 ├── docs/
-│   └── PROJECT_ARCHITECTURE_STATUS.md
+│   ├── PROJECT_ARCHITECTURE_STATUS.md
+│   ├── SKILLS_ARCHITECTURE.md
+│   ├── SKILLS_QUICKSTART.md
+│   └── SKILL_AUTHORING_GUIDE.md
 ├── README.md
 ├── Makefile
 ├── requirements.txt
@@ -234,6 +279,57 @@ CLI 版 Agent 主循环。
 - `run_turn()` 直接接收 `TurnContext`，不再散传 registry、runner、messages、session id、turn id 等参数。
 - 工具调用会通过 `tools/core/context.py` 中升级后的 `ToolInvocation` 携带 session、turn、workspace 和 approval 状态。
 - mutating 工具通过 `ToolInvocation.diff_tracker` 记录本轮 touched paths。
+- `TurnContext.model_messages()` 会在当前用户消息前动态插入本轮显式 skill 注入；这些注入不写回长期 `history.messages`。
+
+### `skills/`
+
+Skills 是独立于工具系统的上下文能力层，第一版只支持本地文件型 skills。
+详细的加载、运行、管理和安全边界说明见 `docs/SKILLS_ARCHITECTURE.md`。
+
+主要职责：
+
+- `skills/models.py` 定义 `SkillMetadata`、`SkillLoadOutcome`、`SkillInjection`、`TurnSkills`、`SkillScope`、`SkillSource` 和 `SkillPolicy`；`SkillMetadata` 可暴露可选 `version` 和 `icon` 用于 catalog 展示、registry update 检查和桌面端图标显示。
+- `skills/installer.py` 读写 `.skill-install.json` 安装来源记录，支持 GitHub repo/tree URL 解析、archive 下载和指定 package 路径抽取；GitHub 请求存在 `GITHUB_TOKEN` / `GH_TOKEN` 时会加入 Authorization header，但 token 不写入安装记录；安装/重新安装过程会拒绝 symlink、路径穿越和过大 archive，不执行远程脚本。
+- `skills/dependencies.py` 根据当前工具目录检查 `dependencies.tools`，返回只用于展示的 `dependency_status`，不自动安装 MCP/plugin，也不启用缺失工具。
+- `skills/registry.py` 从 `openai/skills` 的 `skills/.curated` 读取可安装 skill registry，解析每个远端 `SKILL.md` 的 frontmatter、可选 `version`、`metadata.icon` 和 `dependencies`；GitHub contents API 请求复用同一 token header helper；单条 registry 错误进入 `errors[]`，不阻断本地 catalog 或其他 registry 条目。
+- `skills/spec.py` 定义本地 skill package 标准目录、frontmatter 可识别字段、包大小上限和校验 issue/result 数据结构。
+- `skills/validator.py` 校验本地 skill package，拒绝 symlink、越界路径、缺失或不可解析 `SKILL.md`、过多文件和过大 package，并对非标准目录或依赖声明形状给出 warning。
+- `skills/loader.py` 扫描并解析 `SKILL.md` YAML frontmatter。
+- `skills/manager.py` 按 `project_root/current_dir` 缓存 catalog，并刷新受限资源 resolver。
+- `skills/management.py` 负责显式用户触发的 repo/user skill 新增、导入、读取编辑、更新和删除，写入范围限制在 `.agents/skills` roots 内；导入源可以是用户显式提供的本地路径，但只会被校验并复制，不会加入普通 workspace 权限；创建时可选择 basic 或 standard package template；standard 模板内置 progressive-disclosure 写作提示；标准目录内的 resource 文件可显式 list/read/save/delete。
+- `skills/render.py` 渲染 bounded `<skills_instructions>` catalog，只暴露 `name / description / path` 元数据。
+- `skills/selection.py` 解析 `selected_skills` 和 `$skill-name`，名称歧义时不隐式选择。
+- `skills/resources.py` 只允许读取当前 catalog 中某个 skill 目录内的相对资源，拒绝 `..`、越界路径和 symlink。
+
+当前状态：
+
+- repo skills 从 `project_root -> current_dir` 路径链上的 `.agents/skills/**/SKILL.md` 加载。
+- user skills 从 `~/.agents/skills/**/SKILL.md` 加载，但不会加入普通 workspace `FileSystemPolicy`。
+- YAML frontmatter 必填 `name` 和 `description`，可选 `metadata.short-description`、`metadata.icon`、`version` / `metadata.version`、`policy.allow_implicit_invocation` 和保留展示的 `dependencies.tools`。
+- `allow_implicit_invocation=false` 的 skill 不进入系统提示的隐式 catalog，但仍可通过显式选择或 `$skill-name` 使用。
+- 读取完整 `SKILL.md` 或相对资源时使用 `read_skill` / `read_skill_resource`，不会扩大普通 `read_file` 的可读范围。
+- transcript 记录 `skill_used` / `skill_warning` 事件，不持久化完整 skill 内容；恢复会话时不会自动恢复旧 skill 注入。
+
+### `patch/`
+
+Patch 是 Stage 4 “修改可审查”能力的独立后端域，第一片只提供 proposal core，不直接执行写入。
+
+主要职责：
+
+- `patch/models.py` 定义 `PatchProposal`、`PatchFileChange`、`PatchStatus` 和 `PatchChangeType`，作为后续 WebSocket、桌面 review 和 apply/reject 工具共享的数据边界。
+- `patch/diff_builder.py` 从 before/after 文本构造类 Git unified diff，并统计新增/删除行数，支持 add/update/delete 和 move target 标签。
+- `patch/store.py` 以透明 JSON 文件持久化 pending patch proposal，使用安全 patch id 校验和临时文件原子替换。
+- `tools/patching/patch_review.py` 提供 `apply_patch` / `reject_patch` / `rollback_patch` 工具：apply 与 rollback 都会重新走 `FileSystemPolicy` 校验，apply 可按需运行 post-apply `test_command`，reject 只更新 proposal 状态。
+
+当前状态：
+
+- 已有 focused unit tests 覆盖 update/add/delete diff 标签、增删行统计、proposal JSON round-trip、状态过滤和 patch id 越界拒绝。
+- `write_file` 已有 `dry_run=true` preview；`edit_file` 既有 dry-run 仍保留，但二者尚未升级为默认 patch review 流程。
+- 已新增 `apply_patch` / `reject_patch` / `rollback_patch` 工具，覆盖 apply、reject、rollback、policy recheck、显式 post-apply test command 和 trusted config test command 测试。
+- 已新增 WebSocket patch lifecycle 事件，并写入 transcript；桌面端已在现有 activity/system message 中展示 patch 状态，并新增最小 live `PatchReviewCard.vue` 展示 pending patch diff。`apply_patch_review` / `reject_patch_review` control packet 可直接处理卡片按钮，`session_resumed.pending_patch_review` 可恢复待审查卡片，apply selected 会把已应用文件从 pending proposal 中移除并保留剩余文件继续 review。
+- `apply_patch` 已支持调用方显式传入 `test_command` / `test_timeout`，也能使用 trusted `.codex-mini/config.toml` 中的 `[tests] command` / `timeout` 作为默认 post-apply 测试命令；命令通过现有 command executor 和 sandbox 边界运行。测试成功、失败或被安全策略拒绝都会以 `patch_id` + 本次 changed paths 为边界写入工具 metadata 和 patch proposal metadata；桌面端 patch review 卡片和 patch lifecycle 时间线已能展示这些测试结果。
+- `rollback_patch` 已支持回滚完整 apply 的 patch，也支持把 partial apply 的 patch 恢复成完整 `proposed` review；同样重新走 workspace write policy，对受保护路径保持拒绝。Git 仓库中的 apply / rollback 会先跑 `git apply --check` / `--reverse --check` preflight，symlink 与 binary / 非 UTF-8 文件会被显式拒绝，且 rollback 针对 symlink/binary、`.git` metadata、`.codex-mini`、`.venv`、`__pycache__`、`move_path` / rename + protected path、`cross-root move_path`、多文件 simultaneous cross-root move、multiple writable additional roots 组合、rename + apply/rollback failure diagnostics、partial-apply rollback-failure state reconciliation、多文件 `partial apply + cross-root move_path`、跨多 roots 的失败诊断链路、`additional root` read/write、`additional root + symlink/binary` 组合的专门回归测试已补上；apply / rollback 如果写到一半失败，会把已完成路径、失败文件和未触及路径持久化到 patch metadata。对 `move_path` 目标已存在、或 rollback restore path 被外部重新创建的 rename 冲突场景，现在会显式拒绝而不是静默覆盖。
+- 后续接入时应继续保持 patch 域只负责 proposal/diff/store，权限判断仍归 `security/` 和工具 runner，展示仍归 desktop。
 
 ### `tools/core/`
 
@@ -254,6 +350,20 @@ CLI 版 Agent 主循环。
 - `ask_user`
 - `write_file`
 - `edit_file`
+- `list_files`
+- `file_search`
+- `run_tests`
+- `update_plan`
+- `create_task_list`
+- `apply_patch`
+- `reject_patch`
+- `rollback_patch`
+- `read_skill`
+- `read_skill_resource`
+- `git_status`
+- `git_diff`
+- `git_diff_file`
+- `git_changed_files`
 - `grep`
 - `run_command`
 - `web_fetch`
@@ -325,6 +435,7 @@ append-only JSONL transcript 读写器。
 - 定义 `ToolPermissionError`。
 - 定义 `ToolExecutionContext`。
 - 将项目根目录、session id、安全策略、熔断器和 macOS 沙箱执行器传给各工具。
+- 将只读 `skill_resource_resolver` 传给 `tools/skills` wrapper，保持 skill 资源读取与普通 workspace 文件权限分离。
 
 当前状态：
 
@@ -350,6 +461,7 @@ append-only JSONL transcript 读写器。
 
 - 使用 Pydantic 校验参数。
 - 支持覆盖写入和追加写入。
+- 支持 `dry_run=true`，返回 unified diff 预览且不创建目录、不写入文件。
 - 写入前会通过路径策略检查。
 - 写入前会检查受保护路径。
 - 工具元信息标记为 mutating，并要求上层确认。
@@ -359,8 +471,8 @@ append-only JSONL transcript 读写器。
 
 - WebSocket 主路径会在写入前发出权限确认，批准后才重试执行。
 - CLI 目前没有交互式权限确认，遇到该工具会收到权限错误文本。
-- `write_file` 仍是直接写入工具，没有 dry-run。
-- 后续应纳入 mutating tool 调度策略。
+- `dry_run` 仍走同一套写路径校验和审批策略，避免预览绕过安全边界。
+- 非 dry-run 路径仍是批准后直接写入；后续应纳入 mutating tool patch review 调度策略。
 
 ### `tools/filesystem/edit_file.py`
 
@@ -449,6 +561,18 @@ append-only JSONL transcript 读写器。
 注意事项：
 
 - WebSocket 主路径支持等待用户回答；CLI 路径暂时没有交互式澄清 UI。
+
+### `tools/skills/read_skill.py` 与 `tools/skills/read_skill_resource.py`
+
+Skill 上下文只读 wrapper。
+
+当前状态：
+
+- `read_skill` 只能读取当前 catalog 中某个 skill 的完整 `SKILL.md`，按 path 精确匹配或唯一 name 匹配。
+- `read_skill_resource` 只能读取已选 skill 目录内的相对资源。
+- 两个 wrapper 都是 read-only，不需要审批。
+- 核心 catalog、selection、resolver 逻辑属于顶层 `skills/` 域，wrapper 只负责把受限读取能力暴露给模型。
+- `read_skill` 的工具结果在当前 turn 内会回灌给模型，但 transcript 和回合结束后的长期 history 只保留占位内容。
 
 ## 安全模块
 
@@ -580,7 +704,7 @@ macOS 原生命令沙箱执行器。
 - `model_config.py` 统一模型名、低成本模型、`API_KEY`/`API_BASE`、reasoning effort、DeepSeek `/models` 动态模型列表和 DeepSeek thinking 参数。
 - `model_stream.py` 负责 streaming delta 提取、tool call 增量拼接、assistant message 构造，以及历史 `reasoning_content` 清理。
 - `session_state.py` 负责 WebSocket 内存态 session、挂起/恢复状态，以及首条非空用户输入到来时的延迟持久化。
-- `websocket_context.py` 承载 WebSocket 连接内会反复变化的 workspace、session store、session id、session state、tool registry 和 messages。
+- `websocket_context.py` 承载 WebSocket 连接内会反复变化的 workspace、session store、session id、session state、tool registry、skill manager 和 messages。
 - `transcript_events.py` 统一 transcript event 写入、assistant transcript payload 清理和用户拒绝 tool call 时的结构化结果。
 - `turn_runner.py` 承载单轮模型 streaming、tool call 执行、权限等待、approve/deny 重试、tool result event 和 session suspension 事件。
 
@@ -594,7 +718,8 @@ macOS 原生命令沙箱执行器。
 
 当前职责：
 
-- `request_dispatcher.py` 负责 `open_workspace`、`new_session`、`list_sessions`、`delete_session`、`resume_session`、`conversation_title_request` 等控制类 packet 分发。
+- `request_dispatcher.py` 负责控制类 packet 顶层分发；skill packet 只做委托，不直接承载 skill 管理 handler。
+- `skill_processor.py` 负责 `list_skills`、`list_installable_skills`、`get_skill`、`create_skill`、`import_skill`、`install_skill`、`install_registry_skill`、`reinstall_skill`、`update_skill`、`delete_skill` 和 skill resource 管理事件，并统一发送 skill catalog/management/registry 事件。
 - `title_processor.py` 负责根据首条用户消息调用低成本模型生成短标题，并统一清理与截断标题文本。
 - 标题来源标记为 `low-cost-first-user`。
 
@@ -632,6 +757,9 @@ FastAPI WebSocket transport 和请求分发入口。
 - 支持 `new_session` 创建新会话。
 - WebSocket 新会话先只存在于内存；只有第一条非空 `user_input` 到达时才写入 `.codex-mini/sessions/`，避免启动、切 workspace、点击新对话产生空 transcript。
 - 支持 `list_sessions` 返回历史会话摘要。
+- 支持 `list_skills` 返回当前 workspace/current_dir 的 skills catalog 和加载错误。
+- 支持 `list_installable_skills` 返回 curated registry 中可安装的 skills，并通过 `errors[]` 暴露 registry 读取或解析错误；返回条目会根据当前 catalog 和 `.skill-install.json` source 标注 `installed`、`installed_path`、`installed_version` 和 `update_available`，并根据当前工具目录标注 `dependency_status`。
+- 支持 `get_skill`、`create_skill`、`import_skill`、`install_skill`、`install_registry_skill`、`reinstall_skill`、`update_skill` 和 `delete_skill` 管理本地 repo/user skills；`create_skill.package_template` 可选 `basic` 或 `standard`；`import_skill` 可从显式本地路径复制 package，但不会扩大 workspace 文件权限；`install_skill` 当前支持 `source_type: github` 的 repo/tree URL，`install_registry_skill` 复用 registry 条目的 GitHub source，GitHub 请求可读取 `GITHUB_TOKEN` / `GH_TOKEN` 作为 Authorization header，`reinstall_skill` 仅允许 GitHub-installed skill；支持 `list_skill_resources`、`get_skill_resource`、`save_skill_resource` 和 `delete_skill_resource` 管理标准资源目录内的文本资源；这些是显式用户控制事件，不暴露给模型工具层。
 - 支持带 `session_id` 的 `resume_session` 从磁盘恢复历史会话上下文、可展示消息和重新验证后的 workspace policy。
 - 支持 `conversation_title_request`，当前标题生成策略为根据首条 user 消息调用低成本模型生成短标题，返回前清理与截断，来源标记为 `low-cost-first-user`。
 - DeepSeek 模型请求会按官方 thinking 参数兼容：`off` 显式发送 `thinking.disabled`，开启思考时发送 `thinking.enabled` 并把 `low/medium` 映射为 `high`、`xhigh/max` 映射为 `max`。
@@ -642,6 +770,18 @@ FastAPI WebSocket transport 和请求分发入口。
   - `workspace_policy_changed`
   - `workspace_error`
   - `sessions_list`
+  - `skills_listed`
+  - `installable_skills_listed`
+  - `skill_loaded`
+  - `skill_saved`
+  - `skill_deleted`
+  - `skill_error`
+  - `skill_resources_listed`
+  - `skill_resource_loaded`
+  - `skill_resource_saved`
+  - `skill_resource_deleted`
+  - `skill_used`
+  - `skill_warning`
   - `tool_call_started`
   - `tool_call_result`
   - `permission_request`
@@ -660,10 +800,11 @@ FastAPI WebSocket transport 和请求分发入口。
 - `permission_request` metadata 会携带当前 `current_dir`、`permission_profile`、`approval_policy` 和 `network_policy`，前端权限弹窗可直接展示当前安全边界。
 - 收到 `resume_session` 后，会清理 session 挂起状态和对应熔断计数。
 - WebSocket 路径已经用 LiteLLM `stream=True` 推送真实 `assistant_token`。
+- 每轮 `user_input` 会先加载当前 skills catalog，处理 `selected_skills` 和 `$skill-name`；显式 skill 注入只作用于当前 turn。
 - WebSocket 路径会把用户消息、assistant 消息、工具结果、权限决定、挂起/恢复和标题事件写入 transcript。
 - workspace 切换会写入 `workspace_opened` transcript 事件，并在新 workspace 下启动新的 session；workspace policy 变化会写入 `workspace_policy_changed` transcript 事件。
 - 协议封包、模型配置、streaming helper、turn runner、session state、标题生成和 session view 已下沉到 `server/protocol/`、`server/runtime/`、`server/processors/`、`server/views/`。
-- 控制类 WebSocket packet 已下沉到 `server/processors/request_dispatcher.py`，连接内可变状态由 `server/runtime/websocket_context.py` 承载。
+- 控制类 WebSocket packet 已下沉到 `server/processors/request_dispatcher.py`，skill 管理请求由 `server/processors/skill_processor.py` 承接，连接内可变状态由 `server/runtime/websocket_context.py` 承载。
 
 当前不足：
 
@@ -687,7 +828,7 @@ Electron + Vue + TypeScript 本地客户端。
 - Markdown 渲染使用 `markdown-it` + `DOMPurify`，并保持工具结果 UI 与 assistant 正文分离。
 - 前端类型定义覆盖 runtime event 和 client packet。
 - 前端 runtime store 已能保存 `workspace` 状态，并发送 `open_workspace`、`change_directory`、`add_dir`、`set_permission_mode` packet；原生目录选择 UI 已接入 TitleBar 操作区。
-- TitleBar 已展示 workspace trust；权限弹窗已简化为命令确认；ChatComposer 已提供权限模式切换入口。
+- TitleBar 已展示 workspace trust；权限弹窗会展示原因、cwd、permission profile、网络/沙箱状态和 session prefix 建议；ChatComposer 已提供权限模式切换入口并明确标记 `full_access` 风险。主侧边栏 `插件` 页面承载 Skills catalog、选择和 lifecycle management 面板。Skills 菜单和编辑器细节已拆到 `SkillMenu.vue` / `SkillEditor.vue`，新建 skill 时可选择 basic 或 standard package 模板，可通过 GitHub URL 安装 skill，也可从 curated registry 列表安装 skill；registry 条目显示已安装、可更新和缺失工具状态，且可更新条目可直接触发重新安装；GitHub-installed skill 可从菜单重新安装，编辑 skill 时可管理标准资源目录内的文本资源。
 
 当前不足：
 
@@ -788,10 +929,12 @@ final_answer
 最近一次本地验证结果：
 
 - `.venv/bin/python -m unittest discover -s tests` 当前通过。
-- 当前单测数量：270。
-- `ToolRegistry` 能加载 12 个工具 schema。
+- 当前单测数量：386。
+- `ToolRegistry` 能加载 21 个工具 schema。
+- `desktop/` 下 `pnpm run typecheck` 与 `pnpm run build` 当前通过。
 - `read_file README.md` 可正常执行。
 - `list_files`、`file_search`、`run_tests`、`update_plan` 和 `create_task_list` 已进入默认工具目录。
+- `read_skill` 和 `read_skill_resource` 已进入默认工具目录，且测试覆盖 catalog 内读取、资源越界拒绝、user skill 不扩展 workspace 权限和 skill 内容不污染恢复上下文。
 - `run_tests` 已走 command executor、filesystem policy、network policy 和 sandbox mode，不再直接 `subprocess.run`。
 - `update_plan` / `create_task_list` 已标记为写 runtime task state 的 mutating 工具，默认需要审批。
 - WebSocket `plan_request -> plan_pending` 和 `plan_confirm -> task_list -> final_answer` 第一版有测试覆盖。
@@ -802,6 +945,7 @@ final_answer
 - `write_file` / `edit_file` 在未批准时会返回 `permission_action=ask`。
 - WebSocket event helper、streaming tool call 拼接、session suspend/resume 状态有单元测试覆盖。
 - WebSocket `task_list -> final_answer` 事件序列有集成测试覆盖。
+- WebSocket `list_skills` 和显式 `$skill` 注入已有集成测试覆盖。
 - session store、JSONL transcript、历史会话摘要、模型上下文恢复和首条用户提问标题生成有单元测试覆盖。
 - `.env` 和 `.git` 相关受保护路径会被策略拦截。
 - macOS Seatbelt profile 会按 filesystem/network policy 生成，测试覆盖 readable/writable roots、additional roots 和默认 network restricted。
@@ -842,10 +986,14 @@ final_answer
 - `FileSystemPolicy`、`PermissionProfile`、`ApprovalPolicy`、`NetworkPolicy` 第一版。
 - read/write/edit/grep/run_command cwd 统一走 `current_dir + filesystem policy`。
 - `change_directory`、`add_dir` 和 `workspace_policy_changed` 第一版。
+- AGENTS.md-first 项目指令闭环：从 `project_root` 到 `current_dir` 分层加载、共享总预算、external additional root 边界、workspace/cwd 变化后的 prompt 刷新，以及 session resume 恢复均有实现和回归测试。
 - `.env` read/write 保护和 `.codex-mini` write 保护。
 - 基于首条用户提问的 conversation title 生成。
 - user turn 进入模型前的 `task_list` 生成和前端事件。
-- `plan_request` / `plan_confirm` / `plan_cancel` runtime first slice：支持先生成待确认计划，确认后复用普通 `user_input` 执行路径；桌面端已有持久化计划模式开关和轻量审阅确认卡片，已确认计划会注入模型执行上下文并参与 session recovery。
+- Skills 本地文件型 MVP：repo/user skill catalog、progressive disclosure、`list_skills`、显式 skill 注入、`read_skill` / `read_skill_resource`、`skill_used` / `skill_warning` 事件，以及桌面端显式 skill 新增/导入/GitHub 安装与重新安装/curated registry 安装与可更新条目直接更新/编辑/删除、标准资源文件管理、安装来源记录、GitHub token header、版本字段、图标字段、registry update 提示、dependencies.tools 缺失提醒、quickstart、authoring guide、示例 package 和创建-选择-注入-读资源 smoke test。
+- 透明文件型 Memory 第一片：Session/Task Memory、显式偏好记录、摘要/list/search/forget 控制事件、会话切换自动摘要、MEMORY.md 索引和关键词搜索；不依赖向量数据库。
+- Stage 5 Permission/Sandbox Lite 第一片：权限弹窗上下文、`full_access` 风险提示、sandbox fallback 说明及聚焦回归测试。
+- `plan_request` / `plan_confirm` / `plan_cancel` runtime first slice：支持先生成待确认计划书，确认后复用普通 `user_input` 执行路径；桌面端已有持久化计划模式开关、对话流计划书和轻量确认/取消动作卡，已确认计划书会注入模型执行上下文并参与 session recovery。
 - `edit_file` dry-run 预览。
 - `list_files` 文件枚举、`file_search` 文件名模糊搜索、`run_tests` 测试摘要工具。
 - `update_plan` / `create_task_list` 轻量任务追踪工具。
@@ -864,7 +1012,7 @@ final_answer
 - 权限系统已有 `allow/deny/ask` 决策、统一 filesystem policy、prefix exec policy、runtime permission mode 和 policy-driven Seatbelt 第一版，但还不是完整可编辑 project policy。
 - session transcript 可以恢复模型上下文和持久挂起状态，但更完整的 checkpoint/restore 还未产品化。
 - `run_tests` 已接入 sandbox/permission 边界，但测试框架识别和失败解析仍是第一版启发式实现。
-- Plan Mode 目前完成后端协议、桌面 store plumbing、轻量计划审阅确认 UI 和确认计划的模型上下文约束，仍缺计划编辑和更严格的步骤级执行约束。
+- Plan Mode 目前完成后端协议、桌面 store plumbing、对话流计划书、轻量确认动作卡和确认计划书的模型上下文约束，仍缺计划编辑、只读探索式规划回合和更严格的步骤级执行约束。
 - 桌面客户端已有 runtime shell，但还需要 smoke test、交互 polish 和错误状态收口。
 
 ### 未完成
@@ -876,14 +1024,17 @@ final_answer
 - 更完整的 macOS 沙箱隔离回归测试。
 - 流式模型请求的强制中断与断线恢复。
 - 完整 checkpoint/restore。
+- Durable Memory 的受控 prompt 注入、用户可见管理 UI 和跨项目边界设计。
 
 ## 下一步建议
 
 建议按以下顺序继续收口，优先把“本地 runtime + 桌面客户端”这条线打通：
 
-1. 补 project trust 产品化闭环。
+1. 补桌面客户端 smoke test。
+   - 覆盖 runtime 启动、workspace 打开、普通对话、权限确认、Plan Review、Patch Review 和 Skills 面板的最小真实链路。
+2. 补 project trust 产品化闭环。
    - trust/untrust 控制事件和桌面端状态展示已完成第一版；下一步补策略编辑入口和跨 session allowlist 持久化。
-2. 继续收口桌面客户端壳。
-   - UI 已提供 `change_directory`、`add_dir` 和权限模式切换入口；下一步补更完整错误状态、模式说明和 smoke test。
-3. 做集成测试和回归测试。
-   - WebSocket workspace/permission tests、desktop smoke test、macOS sandbox policy tests。
+3. 收口流式运行时恢复。
+   - 补强制中断、WebSocket 断线恢复和更完整 checkpoint/restore，不改变现有 transcript 真相源。
+4. 做更完整的沙箱回归测试。
+   - 保留当前 Stage 5 Lite 边界，补真实 macOS Seatbelt 场景和 fallback 行为验证。

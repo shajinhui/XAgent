@@ -1,6 +1,6 @@
 # Workspace 与权限策略架构
 
-本文档定义 Codex-mini 下一阶段的 workspace 与 permission 架构。目标不是把 OpenAI Codex 或 Claude Code analysis 的实现照搬过来，而是吸收它们的稳定边界，落到当前 Python runtime + Electron/Vue desktop client 的产品形态里。
+本文档定义 XCode 下一阶段的 workspace 与 permission 架构。目标不是把 OpenAI Codex 或 Claude Code analysis 的实现照搬过来，而是吸收它们的稳定边界，落到当前 Python runtime + Electron/Vue desktop client 的产品形态里。
 
 ## 参考基准
 
@@ -31,7 +31,7 @@ Claude Code analysis 的核心启发是：项目身份和当前执行目录必�
 
 ## 设计目标
 
-Codex-mini 的 workspace 与权限系统要满足这些目标：
+XCode 的 workspace 与权限系统要满足这些目标：
 
 - 用户选择的目录是安全边界，不是普通 UI 状态。
 - Python runtime 拥有 workspace、tool execution、permission、sandbox 和 transcript 的最终解释权。
@@ -70,7 +70,7 @@ Codex-mini 的 workspace 与权限系统要满足这些目标：
 
 ## 当前落地状态
 
-截至当前架构，Codex-mini 已经完成运行时模块化，并落地了 `WorkspaceContext v2` 的第一片；workspace/permission v2 还没有完整实现。
+截至当前架构，XCode 已经完成运行时模块化，并落地了 `WorkspaceContext v2` 的第一片；workspace/permission v2 还没有完整实现。
 
 已和新架构对齐的部分：
 
@@ -88,14 +88,15 @@ Codex-mini 的 workspace 与权限系统要满足这些目标：
 - `server/processors/request_dispatcher.py` 已支持 `change_directory`、`add_dir` 和 `workspace_policy_changed`。
 - `workspace/instructions.py` 已支持从 `project_root` 到 `current_dir` 分层加载 `AGENTS.md`，并避免 external additional root 越界加载。
 - desktop TitleBar 已有打开 workspace、切换 current dir 和加入 additional root 的原生目录选择入口。
-- desktop ChatComposer 已提供权限模式切换入口；权限弹窗已简化为命令确认，不再展示 cwd/profile/network 细节。
+- desktop ChatComposer 已提供权限模式切换入口；权限弹窗会展示确认原因、cwd、permission profile、network policy、sandbox 状态和 session prefix rule 建议。
 - `permission_decision` 会把批准时的 workspace snapshot 写入 transcript，resume 只恢复与当前 workspace 安全边界一致的 session allow prefix；全局 permission mode 不参与该边界匹配。
 - runtime session state 已记录 active turn、取消请求和持久挂起状态；`cancel_turn` 与 `session_busy` 已完成等待点第一版。
+- Stage 5 Lite 已补齐 `full_access` 风险提示，以及非 macOS、Seatbelt 缺失和嵌套沙箱失败时的可操作说明；本阶段不扩展 persistent allowlist 或策略编辑器。
 
 尚未落地到代码的部分：
 
 - trust/untrust WebSocket 控制事件和桌面端最小入口已完成第一版；还没有完整策略编辑 UI。
-- 运行时 session allowlist 还没有持久化到 trusted project/user config。
+- 运行时 session allowlist 还没有持久化到 trusted project/user config；Stage 5 Lite 暂不做 persistent allowlist 和策略编辑 UI。
 - workspace resume 已按当前 v2 schema 严格重新验证 `selected_root`、`project_root`、`current_dir` 和 `additional_roots`；运行时 permission mode 不从旧会话恢复，而是从当前全局 runtime preference 重新应用。
 
 下一阶段落地时，应把本文档当作目标架构，把 `docs/PROJECT_ARCHITECTURE_STATUS.md` 当作当前代码事实。两者不一致时，优先以代码事实为准，再同步更新文档。
@@ -251,8 +252,8 @@ class PermissionProfile(StrEnum):
 
 - `READ_ONLY`：允许读授权 roots，不允许写，命令默认只读 sandbox。
 - `WORKSPACE_WRITE`：允许写 workspace 和显式 write roots，保护 metadata，网络默认 restricted。
-- `DANGER_FULL_ACCESS`：Codex-mini 不加 filesystem sandbox，但仍保留危险命令拦截和审计。UI 只在用户显式切换到“完全访问”时启用。
-- `EXTERNAL_SANDBOX`：假定外层已经提供隔离，Codex-mini 仍做 policy 决策和审计。
+- `DANGER_FULL_ACCESS`：XCode 不加 filesystem sandbox，但仍保留危险命令拦截和审计。UI 只在用户显式切换到“完全访问”时启用。
+- `EXTERNAL_SANDBOX`：假定外层已经提供隔离，XCode 仍做 policy 决策和审计。
 
 ### ApprovalPolicy
 
@@ -786,7 +787,8 @@ project-local config denylist：
 - `workspace_policy_changed`。（已完成第一版）
 - TitleBar 显示 workspace trust，并提供切换目录和加入额外目录入口。（已完成第一版）
 - ChatComposer 显示权限模式切换入口。（已完成第一版）
-- 权限弹窗展示最小命令确认。（已完成第一版）
+- 权限弹窗展示确认原因、cwd、permission profile、network policy、sandbox 状态和 session prefix rule 建议。（已完成第一版）
+- composer 与权限弹窗明确标记 `full_access` 会关闭 Seatbelt 并开启网络。（已完成第一版）
 
 验收：
 
@@ -836,15 +838,16 @@ project-local config denylist：
 - WebSocket `trust_workspace` / `untrust_workspace` 控制事件。（已完成第一版）
 - 桌面端 trust level 展示与最小 trust/untrust 入口。（已完成第一版）
 - 默认 `session_only` workspace 不读取 `.codex-mini/config.toml`。（已完成）
-- trusted project 可读取白名单 permission / exec policy config。（已完成第一版）
+- trusted project 可读取白名单 permission / exec policy / tests config。（已完成第一版）
 - project-local config denylist：model/API/credential/hooks/sandbox 等敏感字段直接拒绝。（已完成第一版）
 - 过宽 exec allow rule 直接拒绝。（已完成第一版）
+- 危险 `[tests] command` 直接拒绝，普通测试命令只作为 post-apply 默认测试入口，不改变权限边界。（已完成第一版）
 - resume 不会因为当前 trust store 变成 trusted 而静默升级旧 session 权限。（已完成）
 
 验收：
 
 - 未 trusted 项目里的 `.codex-mini/config.toml` 被忽略。（已完成）
-- trusted 项目里的 read-only / approval / exec deny rule 会进入 ToolRunner。（已完成）
+- trusted 项目里的 read-only / approval / exec deny rule / tests command 会进入 ToolRunner。（已完成）
 - trusted 项目的敏感配置和过宽 allow rule 返回 `workspace_error`。（已完成）
 - trusted snapshot 在当前 trust store 不可信时恢复失败。（已完成）
 - trust workspace 后会重新加载 project-local policy，并通过 `workspace_policy_changed` 推送给前端。（已完成）
@@ -913,4 +916,4 @@ project-local config denylist：
 4. approval 决策写入 transcript。
 5. resume 重新验证 workspace snapshot。
 
-这五件事完成后，Codex-mini 的 workspace 和权限策略已经和 Codex / Claude Code 的工程方向完成第一阶段对齐。
+这五件事完成后，XCode 的 workspace 和权限策略已经和 Codex / Claude Code 的工程方向完成第一阶段对齐。

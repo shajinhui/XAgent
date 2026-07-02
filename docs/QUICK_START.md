@@ -1,4 +1,4 @@
-# Codex-mini 项目状态 & 快速启动
+# XCode 项目状态 & 快速启动
 
 ## ✅ 当前状态
 
@@ -129,11 +129,14 @@ PYTHONPATH=. python3 tests/test_compaction.py
 
 ```
 docs/
+├── QUICK_START.md                           # 快速启动
+├── PROJECT_ARCHITECTURE_STATUS.md           # 当前架构状态
+├── PRODUCTIZATION_ROADMAP.md                # 产品化路线
+├── WORKSPACE_PERMISSION_ARCHITECTURE.md     # Workspace/权限架构
 ├── MEMORY_LAYER.md                          # Memory 层设计
-├── CONTEXT_COMPRESSION.md                   # 压缩机制详解
-├── CODEX_CONTEXT_COMPRESSION_COMPARISON.md  # 与 OpenAI Codex 对比
-├── CONTEXT_OVERFLOW_HANDLING.md             # 溢出处理对比
-└── AUTO_COMPACTION.md                       # 自动压缩使用指南 ⭐
+├── AUTO_COMPACTION.md                       # 自动压缩使用指南
+├── SKILLS_QUICKSTART.md                     # Skills 快速使用
+└── SKILL_AUTHORING_GUIDE.md                 # Skill 编写指南
 ```
 
 ## ⚠️ 已知限制

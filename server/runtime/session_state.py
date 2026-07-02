@@ -11,11 +11,15 @@ from context_manager import ContextManager
 from server.protocol.events import EVENT_SCHEMA_VERSION
 from session import SessionRecord, SessionStore
 from session.models import TranscriptEvent
+from skills import SkillManager, render_available_skills
 from tools.core.catalog import build_default_registry
 from tools.core.registry import ToolRegistry
 from tools.core.runner import ToolRunner, create_tool_context
 from workspace import WorkspaceContext
-from workspace.instructions import render_system_prompt_with_project_instructions
+from workspace.instructions import (
+    render_system_prompt_with_project_instructions,
+    resolve_workspace_test_defaults,
+)
 from workspace.project_config import default_project_policy
 
 
@@ -126,6 +130,8 @@ def recover_session_runtime_state(
 def create_websocket_session(
     workspace: WorkspaceContext,
     system_prompt: str,
+    *,
+    skill_manager: SkillManager | None = None,
 ) -> tuple[str, SessionRuntimeState, ToolRegistry, ToolRunner, ContextManager]:
     """创建 WebSocket 内存会话，但不立即写入磁盘。
 
@@ -140,6 +146,9 @@ def create_websocket_session(
     session_state = SessionRuntimeState(session_id=session_id)
     registry = build_default_registry()
     project_policy = workspace.project_policy or default_project_policy()
+    default_test_command, default_test_timeout, default_test_source = resolve_workspace_test_defaults(
+        workspace
+    )
     runner = ToolRunner(
         registry,
         create_tool_context(
@@ -152,12 +161,20 @@ def create_websocket_session(
             network_policy=project_policy.network_policy,
             permission_profile=project_policy.permission_profile,
             approval_policy=project_policy.approval_policy,
+            skill_resource_resolver=skill_manager.resolver if skill_manager else None,
+            default_test_command=default_test_command,
+            default_test_source=default_test_source,
+            default_test_timeout=default_test_timeout,
         ),
     )
     rendered_system_prompt, _instructions = render_system_prompt_with_project_instructions(
         system_prompt,
         workspace,
     )
+    if skill_manager is not None:
+        skills_fragment, _warning = render_available_skills(skill_manager.load_for_workspace(workspace))
+        if skills_fragment:
+            rendered_system_prompt = f"{rendered_system_prompt}\n\n{skills_fragment}"
     history = ContextManager.with_system_prompt(rendered_system_prompt)
 
     return session_id, session_state, registry, runner, history

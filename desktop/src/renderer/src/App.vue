@@ -23,10 +23,14 @@ import {
 import ChatComposer from '@renderer/components/ChatComposer.vue'
 import ClarificationDialog from '@renderer/components/ClarificationDialog.vue'
 import MessageList from '@renderer/components/MessageList.vue'
+import PatchResultCard from '@renderer/components/PatchResultCard.vue'
+import PatchReviewCard from '@renderer/components/PatchReviewCard.vue'
 import PermissionDialog from '@renderer/components/PermissionDialog.vue'
 import PlanReviewCard from '@renderer/components/PlanReviewCard.vue'
+import SkillMenu from '@renderer/components/SkillMenu.vue'
 import TaskRunCard from '@renderer/components/TaskRunCard.vue'
 import TitleBar from '@renderer/components/TitleBar.vue'
+import IconButton from '@renderer/components/ui/IconButton.vue'
 import { useChatStore } from '@renderer/stores/chat'
 import { useRuntimeStore } from '@renderer/stores/runtime'
 import { useThemeStore } from '@renderer/stores/theme'
@@ -37,7 +41,7 @@ type ConversationSessionItem = RuntimeSessionSummary & {
   selectedRoot: string
 }
 
-type MainView = 'chat' | 'settings'
+type MainView = 'chat' | 'plugins' | 'settings'
 type SettingsSection = 'appearance' | 'model' | 'permissions' | 'workspace' | 'about'
 type SettingsSectionItem = {
   id: SettingsSection
@@ -81,11 +85,18 @@ const themeOptions: Array<{ mode: ThemeMode; label: string }> = [
 
 const visibleProjects = computed(() => runtime.workspaceProjects)
 const isSettingsView = computed(() => mainView.value === 'settings')
+const isPluginsView = computed(() => mainView.value === 'plugins')
 const hasConversationStarted = computed(() =>
   chat.messages.some((message) => message.role === 'user')
 )
-const titleBarTitle = computed(() => (isSettingsView.value ? '设置' : chat.conversationTitle))
-const titleBarMessageCount = computed(() => (isSettingsView.value ? 0 : chat.messageCount))
+const titleBarTitle = computed(() => {
+  if (isSettingsView.value) return '设置'
+  if (isPluginsView.value) return '插件'
+  return chat.conversationTitle
+})
+const titleBarMessageCount = computed(() =>
+  isSettingsView.value || isPluginsView.value ? 0 : chat.messageCount
+)
 const themeStatus = computed(() => {
   if (theme.mode !== 'system') return theme.label
   return `跟随系统 · ${theme.resolved === 'dark' ? '深色' : '浅色'}`
@@ -135,6 +146,7 @@ const composerPlaceholder = computed(() => {
   if (runtime.isConnecting) return '正在连接后端...'
   if (runtime.planRequestInFlight) return '正在生成计划...'
   if (runtime.pendingPlan) return '计划待确认...'
+  if (runtime.pendingPatchReview) return 'Patch 待审查...'
   return '输入消息...'
 })
 
@@ -144,7 +156,8 @@ const composerDisabled = computed(
     runtime.isSuspended ||
     runtime.planRequestInFlight ||
     Boolean(runtime.activeTurnId) ||
-    Boolean(runtime.pendingPlan)
+    Boolean(runtime.pendingPlan) ||
+    Boolean(runtime.pendingPatchReview)
 )
 function toggleSidebar(): void {
   sidebarOpen.value = !sidebarOpen.value
@@ -270,6 +283,21 @@ function openSettings(section: SettingsSection = 'appearance'): void {
   closeSessionContextMenu()
   settingsSection.value = section
   mainView.value = 'settings'
+}
+
+function openPlugins(): void {
+  closeSessionContextMenu()
+  mainView.value = 'plugins'
+  if (!runtime.skills.length && !runtime.skillErrors.length && !runtime.skillsLoading) {
+    void runtime.requestSkills()
+  }
+  if (
+    !runtime.installableSkills.length &&
+    !runtime.installableSkillErrors.length &&
+    !runtime.installableSkillsLoading
+  ) {
+    void runtime.requestInstallableSkills()
+  }
 }
 
 async function deleteContextSession(): Promise<void> {
@@ -409,26 +437,27 @@ onBeforeUnmount(() => {
     <aside class="app-sidebar" :aria-hidden="!sidebarOpen">
       <div class="sidebar-top">
         <span class="sidebar-window-spacer" aria-hidden="true"></span>
-        <button
+        <IconButton
           class="sidebar-toggle in-sidebar"
-          type="button"
-          :aria-label="sidebarOpen ? '收起侧边栏' : '打开侧边栏'"
+          size="lg"
+          :label="sidebarOpen ? '收起侧边栏' : '打开侧边栏'"
           @click="toggleSidebar"
         >
           <PanelLeft />
-        </button>
-        <button class="sidebar-icon-button" type="button" aria-label="后退" disabled>
+        </IconButton>
+        <IconButton class="sidebar-icon-button" label="后退" disabled>
           <ChevronLeft />
-        </button>
-        <button class="sidebar-icon-button" type="button" aria-label="前进" disabled>
+        </IconButton>
+        <IconButton class="sidebar-icon-button" label="前进" disabled>
           <ChevronRight />
-        </button>
+        </IconButton>
       </div>
 
       <nav class="sidebar-primary" aria-label="侧边栏操作">
         <button
           type="button"
-          class="sidebar-action active"
+          class="sidebar-action"
+          :class="{ active: mainView === 'chat' }"
           @click="void createDefaultConversationWorkspace()"
         >
           <MessageSquarePlus />
@@ -438,10 +467,16 @@ onBeforeUnmount(() => {
           <Search />
           <span>搜索</span>
         </button>
-        <button type="button" class="sidebar-action" title="插件功能稍后接入" disabled>
-          <Blocks />
-          <span>插件</span>
-        </button>
+        <button
+          type="button"
+          class="sidebar-action"
+          :class="{ active: isPluginsView }"
+          title="管理插件与 Skills"
+          @click="openPlugins"
+          >
+            <Blocks />
+            <span>插件</span>
+          </button>
         <button type="button" class="sidebar-action" title="自动化功能稍后接入" disabled>
           <Clock3 />
           <span>自动化</span>
@@ -462,9 +497,9 @@ onBeforeUnmount(() => {
               <ChevronDown />
             </button>
             <div class="sidebar-heading-actions" aria-label="项目操作">
-              <button type="button" aria-label="打开工作区" @click="openWorkspaceFromDialog">
+              <IconButton label="打开工作区" size="sm" @click="openWorkspaceFromDialog">
                 <FolderPlus />
-              </button>
+              </IconButton>
             </div>
           </div>
 
@@ -490,24 +525,24 @@ onBeforeUnmount(() => {
                   <span>{{ project.display_name }}</span>
                   <ChevronDown class="sidebar-project-chevron" />
                 </button>
-                <button
-                  type="button"
+                <IconButton
                   class="sidebar-project-action"
-                  aria-label="切换到项目"
+                  label="切换到项目"
                   title="切换到项目"
+                  size="sm"
                   @click="openProject(project)"
                 >
                   <ExternalLink />
-                </button>
-                <button
-                  type="button"
+                </IconButton>
+                <IconButton
                   class="sidebar-project-action"
-                  aria-label="在此项目中新建会话"
+                  label="在此项目中新建会话"
                   title="在此项目中新建会话"
+                  size="sm"
                   @click="startProjectConversation(project)"
                 >
                   <Plus />
-                </button>
+                </IconButton>
               </div>
 
               <div v-if="isProjectExpanded(project.selected_root)" class="sidebar-session-group">
@@ -553,14 +588,14 @@ onBeforeUnmount(() => {
               <span>对话</span>
             </div>
             <div class="sidebar-heading-actions" aria-label="对话操作">
-              <button
-                type="button"
-                aria-label="新建普通对话"
+              <IconButton
+                label="新建普通对话"
                 title="创建普通对话目录"
+                size="sm"
                 @click="void createDefaultConversationWorkspace()"
               >
                 <Plus />
-              </button>
+              </IconButton>
             </div>
           </div>
           <button
@@ -621,13 +656,13 @@ onBeforeUnmount(() => {
       class="chat-window"
       :class="{
         'conversation-empty': mainView === 'chat' && !hasConversationStarted,
-        'settings-active': isSettingsView
+        'settings-active': isSettingsView || isPluginsView
       }"
-      aria-label="Codex-mini chat preview"
+      aria-label="XCode chat preview"
     >
       <TitleBar
         :title="titleBarTitle"
-        :title-status="isSettingsView ? 'ready' : chat.conversationTitleStatus"
+        :title-status="isSettingsView || isPluginsView ? 'ready' : chat.conversationTitleStatus"
         :message-count="titleBarMessageCount"
         :connection-status="runtime.connectionStatus"
         :is-suspended="runtime.isSuspended"
@@ -734,7 +769,7 @@ onBeforeUnmount(() => {
           <template v-else>
             <header class="settings-content-header">
               <h2>关于</h2>
-              <p>Codex-mini</p>
+              <p>XCode</p>
             </header>
             <div class="settings-card">
               <div class="settings-row">
@@ -745,6 +780,53 @@ onBeforeUnmount(() => {
               </div>
             </div>
           </template>
+        </section>
+      </div>
+      <div v-else-if="isPluginsView" class="plugins-page">
+        <section class="plugins-skill-panel" aria-label="Skills 管理">
+          <SkillMenu
+            :disabled="composerDisabled"
+            :skills="runtime.skills"
+            :selected-skill-paths="runtime.selectedSkillPaths"
+            :skills-loading="runtime.skillsLoading"
+            :skill-errors="runtime.skillErrors"
+            :installable-skills="runtime.installableSkills"
+            :installable-skill-errors="runtime.installableSkillErrors"
+            :installable-skills-loading="runtime.installableSkillsLoading"
+            :skill-editor-loading="runtime.skillEditorLoading"
+            :skill-editor-skill="runtime.skillEditorSkill"
+            :skill-editor-content="runtime.skillEditorContent"
+            :skill-management-error="runtime.skillManagementError"
+            :skill-resources="runtime.skillResources"
+            :skill-resources-loading="runtime.skillResourcesLoading"
+            :skill-resource-loading="runtime.skillResourceLoading"
+            :skill-resource-path="runtime.skillResourcePath"
+            :skill-resource-content="runtime.skillResourceContent"
+            :skill-resource-error="runtime.skillResourceError"
+            @toggle-skill="runtime.toggleSelectedSkill"
+            @refresh-skills="(forceReload) => void runtime.requestSkills(forceReload)"
+            @refresh-installable-skills="
+              (forceReload) => void runtime.requestInstallableSkills(forceReload)
+            "
+            @edit-skill="(skill) => void runtime.loadSkillForEditing(skill)"
+            @save-skill="
+              (draft) =>
+                draft.path ? void runtime.updateSkill(draft) : void runtime.createSkill(draft)
+            "
+            @import-skill="(draft) => void runtime.importSkill(draft)"
+            @install-skill="(draft) => void runtime.installSkill(draft)"
+            @install-registry-skill="(skill) => void runtime.installRegistrySkill(skill)"
+            @reinstall-registry-skill="(skill) => void runtime.reinstallRegistrySkill(skill)"
+            @reinstall-skill="(skill) => void runtime.reinstallSkill(skill)"
+            @delete-skill="(skill) => void runtime.deleteSkill(skill)"
+            @clear-skill-editor="runtime.clearSkillEditor"
+            @refresh-skill-resources="(skill) => void runtime.requestSkillResources(skill)"
+            @load-skill-resource="(skill, resource) => void runtime.loadSkillResource(skill, resource)"
+            @save-skill-resource="(draft) => void runtime.saveSkillResource(draft)"
+            @delete-skill-resource="
+              (skill, resource) => void runtime.deleteSkillResource(skill, resource)
+            "
+          />
         </section>
       </div>
       <template v-else>
@@ -773,23 +855,46 @@ onBeforeUnmount(() => {
             @confirm="runtime.confirmPlan(runtime.pendingPlan?.plan_id)"
             @cancel="runtime.cancelPlan(runtime.pendingPlan?.plan_id)"
           />
-          <ChatComposer
-            v-else
-            :disabled="composerDisabled"
-            :placeholder="composerPlaceholder"
-            :model="runtime.selectedModel"
-            :model-options="runtime.modelOptions"
-            :reasoning-effort="runtime.reasoningEffort"
-            :reasoning-options="runtime.reasoningEffortOptions"
-            :permission-mode="runtime.permissionMode"
-            :plan-mode-enabled="runtime.planModeEnabled"
-            @send="runtime.sendUserInput"
-            @plan="(content) => void runtime.requestPlan(content)"
-            @toggle-plan-mode="runtime.setPlanModeEnabled(!runtime.planModeEnabled)"
-            @update:model="runtime.setSelectedModel"
-            @update:reasoning-effort="runtime.setReasoningEffort"
-            @update:permission-mode="runtime.setPermissionMode"
+          <PatchReviewCard
+            v-else-if="runtime.pendingPatchReview"
+            :patch="runtime.pendingPatchReview"
+            :disabled="runtime.isConnecting || Boolean(runtime.activeTurnId)"
+            @apply="
+              (patchId, selectedPaths, testCommand, testTimeout) =>
+                void runtime.applyPatchReview(patchId, selectedPaths, testCommand, testTimeout)
+            "
+            @reject="(patchId) => void runtime.rejectPatchReview(patchId)"
+            @dismiss="runtime.dismissPatchReview(runtime.pendingPatchReview?.patch_id)"
           />
+          <template v-else>
+            <PatchResultCard
+              v-if="runtime.latestPatchResult"
+              :patch="runtime.latestPatchResult"
+              @dismiss="runtime.dismissLatestPatchResult"
+            />
+            <ChatComposer
+              :disabled="composerDisabled"
+              :placeholder="composerPlaceholder"
+              :model="runtime.selectedModel"
+              :model-options="runtime.modelOptions"
+              :reasoning-effort="runtime.reasoningEffort"
+              :reasoning-options="runtime.reasoningEffortOptions"
+              :permission-mode="runtime.permissionMode"
+              :plan-mode-enabled="runtime.planModeEnabled"
+              :skills="runtime.skills"
+              :selected-skill-paths="runtime.selectedSkillPaths"
+              :skills-loading="runtime.skillsLoading"
+              :skill-errors="runtime.skillErrors"
+              @send="runtime.sendUserInput"
+              @plan="(content) => void runtime.requestPlan(content)"
+              @toggle-plan-mode="runtime.setPlanModeEnabled(!runtime.planModeEnabled)"
+              @toggle-skill="runtime.toggleSelectedSkill"
+              @refresh-skills="(forceReload) => void runtime.requestSkills(forceReload)"
+              @update:model="runtime.setSelectedModel"
+              @update:reasoning-effort="runtime.setReasoningEffort"
+              @update:permission-mode="runtime.setPermissionMode"
+            />
+          </template>
         </div>
       </template>
     </section>

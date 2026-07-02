@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import difflib
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from patch import PatchStore, build_file_change, build_patch_proposal
 from tools.core.types import ToolExecutionContext, ToolMeta, ToolResult
 
 
@@ -60,22 +61,41 @@ def run(ctx: ToolExecutionContext, payload: dict) -> str | ToolResult:
     updated_lines = list(lines)
     updated_lines[args.start_line - 1 : args.end_line] = replacement_lines
     if args.dry_run:
-        diff = "".join(
-            difflib.unified_diff(
-                lines,
-                updated_lines,
-                fromfile=path.as_posix(),
-                tofile=path.as_posix(),
-            )
+        before = "".join(lines)
+        after = "".join(updated_lines)
+        change = build_file_change(
+            _display_path(ctx, path),
+            before,
+            after,
+            existed_before=True,
+            exists_after=True,
         )
+        proposal = build_patch_proposal(
+            session_id=ctx.session_id,
+            turn_id=ctx.turn_id or "system",
+            cwd=ctx.current_dir,
+            changes=[change],
+            summary=f"edit_file preview: {change.path}",
+            metadata={
+                "tool": META.name,
+                "start_line": args.start_line,
+                "end_line": args.end_line,
+            },
+        )
+        PatchStore(ctx.project_root / ".codex-mini" / "patches").save(proposal)
         return ToolResult(
             ok=True,
-            content=diff or f"无变更: {path}",
+            content=change.unified_diff or f"无变更: {path}",
             metadata={
                 "dry_run": True,
+                "patch_id": proposal.patch_id,
+                "patch_status": proposal.status.value,
                 "path": path.as_posix(),
                 "start_line": args.start_line,
                 "end_line": args.end_line,
+                "change_type": change.change_type.value,
+                "additions": change.additions,
+                "deletions": change.deletions,
             },
         )
 
@@ -87,3 +107,12 @@ def run(ctx: ToolExecutionContext, payload: dict) -> str | ToolResult:
     path.write_text("".join(lines), encoding="utf-8")
 
     return f"已编辑文件: {path} (lines {args.start_line}-{args.end_line})"
+
+
+def _display_path(ctx: ToolExecutionContext, path: Path) -> str:
+    """尽量使用项目相对路径，让 diff header 和 patch review 更稳定。"""
+
+    try:
+        return path.relative_to(ctx.project_root).as_posix()
+    except ValueError:
+        return path.as_posix()

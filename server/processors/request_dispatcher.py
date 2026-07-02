@@ -8,15 +8,23 @@ WebSocket 控制请求分发器。
 from __future__ import annotations
 
 import uuid
+import json
 import time
 from typing import Any, Dict
 
 from memory.store import MemoryStore
 from memory.summarizer import extract_task_state, summarize_session
-from server.processors.task_list_processor import fallback_task_list, generate_task_list
+from server.processors.skill_processor import SkillRequestProcessor
+from server.processors.task_list_processor import (
+    build_plan_document,
+    build_plan_summary,
+    fallback_task_list,
+    generate_task_list,
+)
 from server.processors.title_processor import generate_conversation_title, normalize_title_messages
 from server.protocol.events import build_event
 from server.runtime.transcript_events import record_transcript_event
+from server.runtime.turn_runner import emit_tool_result
 from server.runtime.websocket_context import WebSocketRuntimeContext
 from server.views.session_summary import list_session_summaries
 from workspace import PermissionMode, TrustLevel, WorkspaceValidationError
@@ -28,6 +36,7 @@ class WebSocketRequestDispatcher:
     def __init__(self, ws: Any, context: WebSocketRuntimeContext) -> None:
         self.ws = ws
         self.context = context
+        self.skill_processor = SkillRequestProcessor(ws, context)
 
     async def handle_invalid_packet(self) -> None:
         """处理无法解析成 JSON object 的客户端输入。"""
@@ -90,11 +99,20 @@ class WebSocketRequestDispatcher:
         if packet_type == "plan_cancel":
             await self._handle_plan_cancel(packet)
             return True
+        if packet_type == "apply_patch_review":
+            await self._handle_patch_review_control(packet, action="apply")
+            return True
+        if packet_type == "reject_patch_review":
+            await self._handle_patch_review_control(packet, action="reject")
+            return True
         if packet_type == "new_session":
             await self._handle_new_session(packet)
             return True
         if packet_type == "list_sessions":
             await self._handle_list_sessions(packet)
+            return True
+        if self.skill_processor.can_handle(packet_type):
+            await self.skill_processor.handle(packet)
             return True
         if packet_type == "delete_session":
             await self._handle_delete_session(packet)
@@ -382,9 +400,13 @@ class WebSocketRequestDispatcher:
             items = fallback_task_list(content)
             model = f"fallback:{type(exc).__name__}"
 
+        plan_summary = build_plan_summary(content, items)
+        plan_markdown = build_plan_document(content, items)
         plan = {
             "plan_id": str(uuid.uuid4()),
             "content": content,
+            "summary": plan_summary,
+            "plan_markdown": plan_markdown,
             "items": items,
             "model": model,
             "created_at": time.time(),
@@ -494,6 +516,87 @@ class WebSocketRequestDispatcher:
             )
         )
 
+    async def _handle_patch_review_control(
+        self,
+        packet: Dict[str, Any],
+        *,
+        action: str,
+    ) -> None:
+        """处理桌面 Diff Review 卡片的直接 apply/reject 操作。"""
+
+        request_id = _request_id(packet)
+        patch_id = str(packet.get("patch_id") or "").strip()
+        if not patch_id:
+            await self._send_error(
+                packet,
+                request_id=request_id,
+                message="patch_id is required",
+            )
+            return
+        if not self.context.session_persisted:
+            await self._send_error(
+                packet,
+                request_id=request_id,
+                message="session not persisted yet",
+                patch_id=patch_id,
+            )
+            return
+
+        tool_name = "reject_patch" if action == "reject" else "apply_patch"
+        arguments_payload = {"patch_id": patch_id}
+        if tool_name == "apply_patch":
+            selected_paths = _optional_string_list(packet.get("selected_paths"))
+            if selected_paths is not None:
+                arguments_payload["selected_paths"] = selected_paths
+            test_command = str(packet.get("test_command") or "").strip()
+            if test_command:
+                # Diff Review 控制包只透传用户显式提供的测试命令，后端不猜测项目测试入口。
+                arguments_payload["test_command"] = test_command
+            if packet.get("test_timeout") is not None:
+                arguments_payload["test_timeout"] = packet.get("test_timeout")
+        if tool_name == "reject_patch":
+            reason = str(packet.get("reason") or "用户在 Diff Review 卡片中拒绝").strip()
+            arguments_payload["reason"] = reason
+        arguments = json.dumps(arguments_payload, ensure_ascii=False, sort_keys=True)
+        turn_id = _turn_id(packet, "patch")
+
+        record_transcript_event(
+            self.context.session_store,
+            self.context.session_id,
+            "tool_call_started",
+            {
+                "turn_id": turn_id,
+                "request_id": request_id,
+                "tool": tool_name,
+                "arguments": arguments,
+                "source": "patch_review_control",
+            },
+        )
+        await self.ws.send_json(
+            build_event(
+                "tool_call_started",
+                self.context.session_id,
+                turn_id,
+                request_id=request_id,
+                name=tool_name,
+                arguments=arguments,
+            )
+        )
+
+        # 用户点击 Diff Review 卡片即代表批准这次 patch 操作；工具内部仍会
+        # 重新执行 FileSystemPolicy 检查，不能绕过 protected path 等安全边界。
+        result = self.context.runner.execute(tool_name, arguments, approved=True)
+        await emit_tool_result(
+            self.ws,
+            self.context.session_store,
+            result,
+            self.context.session_state,
+            self.context.session_id,
+            turn_id,
+            request_id,
+            tool_name,
+        )
+
     async def _handle_new_session(self, packet: Dict[str, Any]) -> None:
         """创建新的内存会话；不落盘，直到首条非空 user_input 到达。"""
 
@@ -519,7 +622,11 @@ class WebSocketRequestDispatcher:
         except (TypeError, ValueError):
             limit = 20
 
-        sessions = list_session_summaries(self.context.session_store, limit=limit)
+        sessions = list_session_summaries(
+            self.context.session_store,
+            limit=limit,
+            workspace=self.context.workspace,
+        )
         await self.ws.send_json(
             build_event(
                 "sessions_list",
@@ -587,7 +694,7 @@ class WebSocketRequestDispatcher:
         if deleted_current:
             self.context.start_new_session()
 
-        sessions = list_session_summaries(target_store, limit=30)
+        sessions = list_session_summaries(target_store, limit=30, workspace=target_workspace)
         await self.ws.send_json(
             build_event(
                 "session_deleted",
@@ -610,7 +717,9 @@ class WebSocketRequestDispatcher:
         target_session_id = str(packet.get("session_id") or "").strip()
         if target_session_id:
             try:
-                display_messages, session_summary = self.context.resume_session_from_disk(target_session_id)
+                display_messages, session_summary, pending_patch_review = (
+                    self.context.resume_session_from_disk(target_session_id)
+                )
             except KeyError:
                 await self._send_error(
                     packet,
@@ -648,6 +757,7 @@ class WebSocketRequestDispatcher:
             )
             display_messages = []
             session_summary = None
+            pending_patch_review = None
             resumed_from_disk = False
 
         if self.context.session_persisted:
@@ -677,6 +787,7 @@ class WebSocketRequestDispatcher:
                 message_count=len(self.context.messages),
                 messages=display_messages,
                 session=session_summary,
+                pending_patch_review=pending_patch_review,
                 workspace=self.context.workspace.as_dict(),
             )
         )
@@ -1109,3 +1220,13 @@ def _request_id(packet: Dict[str, Any]) -> str:
 def _turn_id(packet: Dict[str, Any], default: str = "system") -> str:
     """返回数据包中的 turn_id，若缺失返回默认值。"""
     return packet.get("turn_id") or default
+
+
+def _optional_string_list(value: Any) -> list[str] | None:
+    """读取可选字符串列表；缺失时返回 None，非法值由后端工具继续校验。"""
+
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value]

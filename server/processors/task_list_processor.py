@@ -20,6 +20,7 @@ TASK_LIST_MODEL_SOURCE = "low-cost-task-list"
 TASK_STATUS_OPTIONS = {"pending", "in_progress", "completed"}
 MAX_TASK_COUNT = 5
 MAX_TASK_LABEL_LENGTH = 28
+MAX_PLAN_TARGET_LENGTH = 96
 
 
 def sanitize_task_label(value: Any) -> str:
@@ -116,6 +117,64 @@ def fallback_task_list(user_input: str) -> List[Dict[str, str]]:
         {"step": "执行必要检查和修改", "status": "pending"},
         {"step": "汇总结果并交付", "status": "pending"},
     ]
+
+
+def build_plan_summary(user_input: str, items: List[Dict[str, str]]) -> str:
+    """生成计划书卡片摘要，避免只把原始用户输入当说明。"""
+
+    target = _compact_plan_target(user_input)
+    count = len(items) or len(fallback_task_list(user_input))
+    return (
+        f"目标是处理“{target}”。我会先按 {count} 个步骤推进，"
+        "确认前不修改文件、不执行实施动作。"
+    )
+
+
+def build_plan_document(user_input: str, items: List[Dict[str, str]]) -> str:
+    """把待确认步骤渲染成用户可审阅的计划书。"""
+
+    normalized_items = normalize_task_list(items) or fallback_task_list(user_input)
+    target = _compact_plan_target(user_input)
+    lines = [
+        "# 计划书",
+        "",
+        "## Summary",
+        build_plan_summary(user_input, normalized_items),
+        "",
+        "## Execution Plan",
+    ]
+
+    for index, item in enumerate(normalized_items, start=1):
+        lines.append(f"{index}. {item['step']}")
+
+    lines.extend(
+        [
+            "",
+            "## Implementation Rules",
+            "- 你确认前，我只保留这份计划，不进入实际实施阶段。",
+            "- 你确认后，我会优先按计划推进；如果执行中发现安全或技术上必须调整，会说明原因。",
+            "",
+            "## Validation",
+            "- 根据实际改动范围运行最小必要检查。",
+            "- 最后汇总已做事项、验证结果和剩余风险。",
+            "",
+            "## Assumptions",
+            f"- 当前目标以“{target}”为准。",
+            "- 如果你要调整范围，可以先取消计划或补充要求。",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _compact_plan_target(user_input: str) -> str:
+    """压缩计划目标，避免计划书标题/摘要被长输入撑爆。"""
+
+    text = " ".join(user_input.strip().split())
+    if not text:
+        return "处理用户任务"
+    if len(text) <= MAX_PLAN_TARGET_LENGTH:
+        return text
+    return f"{text[:MAX_PLAN_TARGET_LENGTH]}..."
 
 
 def generate_task_list(

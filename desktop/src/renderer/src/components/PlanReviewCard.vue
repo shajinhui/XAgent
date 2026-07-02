@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, type Component } from 'vue'
 import { Check, Circle, CircleAlert, LoaderCircle, Play, X } from '@lucide/vue'
+import IconButton from '@renderer/components/ui/IconButton.vue'
 import type { PlanPendingEvent, RuntimeTaskListItem } from '@renderer/types/runtimeEvents'
 
 const props = defineProps<{
@@ -16,6 +17,8 @@ const emit = defineEmits<{
 type PlanItemStatus = RuntimeTaskListItem['status']
 
 const planItems = computed(() => props.plan.items || [])
+const hasPlanDocument = computed(() => Boolean(props.plan.plan_markdown?.trim()))
+const planSummary = computed(() => props.plan.summary?.trim() || props.plan.content)
 
 function getStatusIcon(status: PlanItemStatus): Component {
   if (status === 'completed') return Check
@@ -30,20 +33,23 @@ function getStatusIcon(status: PlanItemStatus): Component {
     <header class="plan-review-heading">
       <div>
         <h2 id="plan-review-title">计划待确认</h2>
-        <p>{{ plan.content }}</p>
+        <p>{{ planSummary }}</p>
       </div>
-      <button
+      <IconButton
         class="plan-icon-action"
-        type="button"
-        aria-label="取消计划"
+        label="取消计划"
         :disabled="disabled"
         @click="emit('cancel')"
       >
         <X />
-      </button>
+      </IconButton>
     </header>
 
-    <div class="plan-review-steps">
+    <div v-if="hasPlanDocument" class="plan-review-note">
+      上方计划书已生成。确认后我会按这份计划开始实施。
+    </div>
+
+    <div v-else class="plan-review-steps">
       <div
         v-for="(item, index) in planItems"
         :key="`${index}:${item.step}`"
@@ -58,12 +64,22 @@ function getStatusIcon(status: PlanItemStatus): Component {
     </div>
 
     <footer class="plan-review-actions">
-      <button class="plan-secondary-action" type="button" :disabled="disabled" @click="emit('cancel')">
+      <button
+        class="plan-secondary-action"
+        type="button"
+        :disabled="disabled"
+        @click="emit('cancel')"
+      >
         取消
       </button>
-      <button class="plan-primary-action" type="button" :disabled="disabled" @click="emit('confirm')">
+      <button
+        class="plan-primary-action"
+        type="button"
+        :disabled="disabled"
+        @click="emit('confirm')"
+      >
         <Play />
-        <span>确认执行</span>
+        <span>实施计划</span>
       </button>
     </footer>
   </section>

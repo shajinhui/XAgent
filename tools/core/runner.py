@@ -10,6 +10,7 @@ from security.circuit_breaker import CircuitBreaker
 from security.exec_policy import ExecPolicy
 from security.permissions import ApprovalPolicy, FileSystemPolicy, NetworkPolicy, PermissionProfile
 from security.policy import SecurityPolicy
+from skills.resources import SkillResourceResolver
 from tools.core.context import ToolInvocation
 from tools.core.registry import ToolRegistry
 from tools.core.types import ToolExecutionContext, ToolPermissionError, ToolResult
@@ -29,6 +30,10 @@ def create_tool_context(
     permission_profile: PermissionProfile = PermissionProfile.WORKSPACE_WRITE,
     approval_policy: ApprovalPolicy = ApprovalPolicy.ASK_BEFORE_MUTATING,
     circuit_breaker: CircuitBreaker | None = None,
+    skill_resource_resolver: SkillResourceResolver | None = None,
+    default_test_command: str | None = None,
+    default_test_source: str | None = None,
+    default_test_timeout: int = 60,
 ) -> ToolExecutionContext:
     selected = selected_root.resolve()
     project = (project_root or selected).resolve()
@@ -60,6 +65,10 @@ def create_tool_context(
         approval_policy=approval_policy,
         circuit_breaker=circuit_breaker or CircuitBreaker(threshold=3),
         command_executor=SecureMacOSSandboxExecutor(selected),
+        skill_resource_resolver=skill_resource_resolver or SkillResourceResolver(),
+        default_test_command=(default_test_command or "").strip() or None,
+        default_test_source=(default_test_source or "").strip() or None,
+        default_test_timeout=default_test_timeout,
     )
 
 
@@ -79,11 +88,14 @@ class ToolRunner:
 
         is_approved = invocation.approval.approved if approved is None else approved
         previous_diff_tracker = self.ctx.diff_tracker
+        previous_turn_id = self.ctx.turn_id
         self.ctx.diff_tracker = invocation.diff_tracker
+        self.ctx.turn_id = invocation.turn_id
         try:
             result = self.execute(invocation.name, invocation.arguments, approved=is_approved)
         finally:
             self.ctx.diff_tracker = previous_diff_tracker
+            self.ctx.turn_id = previous_turn_id
         if result.ok:
             self._record_invocation_diff(invocation)
         return result
@@ -188,7 +200,7 @@ def _filesystem_policy_for_profile(
     )
 
 
-def _permission_context_metadata(ctx: ToolExecutionContext) -> dict[str, str]:
+def _permission_context_metadata(ctx: ToolExecutionContext) -> dict[str, object]:
     """生成前端权限弹窗需要展示的当前运行边界。"""
 
     return {
@@ -197,4 +209,6 @@ def _permission_context_metadata(ctx: ToolExecutionContext) -> dict[str, str]:
         "permission_profile": ctx.permission_profile.value,
         "approval_policy": ctx.approval_policy.value,
         "network_policy": ctx.network_policy.value,
+        "sandbox_enabled": ctx.permission_profile != PermissionProfile.DANGER_NO_SANDBOX,
+        "network_enabled": ctx.network_policy.value == "enabled",
     }

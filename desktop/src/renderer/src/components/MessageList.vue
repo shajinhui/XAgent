@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, ref, watch, type Component } from 'vue'
 import {
+  Blocks,
   BrainCircuit,
   ChevronRight,
   Copy,
@@ -14,6 +15,7 @@ import {
   TriangleAlert,
   Wrench
 } from '@lucide/vue'
+import IconButton from '@renderer/components/ui/IconButton.vue'
 import { renderMarkdown } from '@renderer/services/markdown'
 import { useChatStore } from '@renderer/stores/chat'
 import { useRuntimeStore } from '@renderer/stores/runtime'
@@ -44,6 +46,7 @@ const activityIcons: Record<ActivityStepKind, Component> = {
   permission: ShieldAlert,
   question: MessageCircleQuestion,
   web: Globe,
+  skill: Blocks,
   tool: Wrench,
   error: TriangleAlert
 }
@@ -89,6 +92,7 @@ function getToolBlockTitle(events: ChatMessage[]): string {
   const editEvents = events.filter((e) => e.step?.kind === 'edit')
   const commandEvents = events.filter((e) => e.step?.kind === 'command')
   const webEvents = events.filter((e) => e.step?.kind === 'web')
+  const skillEvents = events.filter((e) => e.step?.kind === 'skill')
 
   if (readEvents.length) parts.push(`读取 ${readEvents.length} 个文件`)
   if (searchEvents.length)
@@ -100,10 +104,13 @@ function getToolBlockTitle(events: ChatMessage[]): string {
     parts.push(`已运行 ${commandEvents.length} 条命令`)
   }
   if (webEvents.length) parts.push(`已获取 ${webEvents.length} 个网页`)
+  if (skillEvents.length) {
+    parts.push(skillEvents.length > 1 ? `已使用 ${skillEvents.length} 个 Skills` : '已使用 Skill')
+  }
 
   const otherCount = events.filter((e) => {
     const k = e.step?.kind
-    return k && !['read', 'search', 'edit', 'command', 'web'].includes(k)
+    return k && !['read', 'search', 'edit', 'command', 'web', 'skill'].includes(k)
   }).length
   if (otherCount) parts.push(`已调用 ${otherCount} 个工具`)
 
@@ -112,7 +119,7 @@ function getToolBlockTitle(events: ChatMessage[]): string {
 
 // 选取工具块的主图标
 function getToolBlockPrimaryKind(events: ChatMessage[]): ActivityStepKind {
-  const kindPriority: ActivityStepKind[] = ['edit', 'command', 'web', 'search', 'read']
+  const kindPriority: ActivityStepKind[] = ['edit', 'command', 'web', 'skill', 'search', 'read']
   for (const kind of kindPriority) {
     if (events.some((e) => e.step?.kind === kind)) return kind
   }
@@ -278,11 +285,39 @@ function isActivitySectionExpanded(key: string): boolean {
   return expandedActivitySections.value.has(key)
 }
 
-async function scrollToBottom(): Promise<void> {
+type MessageScrollSnapshot = {
+  length: number
+  firstId: number | null
+  lastId: number | null
+  lastContent: string
+  historyLoadRevision: number
+}
+
+function getMessageScrollSnapshot(): MessageScrollSnapshot {
+  const firstMessage = props.messages[0]
+  const lastMessage = props.messages[props.messages.length - 1]
+  return {
+    length: props.messages.length,
+    firstId: firstMessage?.id ?? null,
+    lastId: lastMessage?.id ?? null,
+    lastContent: lastMessage?.content ?? '',
+    historyLoadRevision: chat.historyLoadRevision
+  }
+}
+
+async function scrollToBottom(behavior: ScrollBehavior = 'smooth'): Promise<void> {
   await nextTick()
-  transcript.value?.scrollTo({
-    top: transcript.value.scrollHeight,
-    behavior: 'smooth'
+  const transcriptElement = transcript.value
+  if (!transcriptElement) return
+
+  if (behavior === 'auto') {
+    transcriptElement.scrollTop = transcriptElement.scrollHeight
+    return
+  }
+
+  transcriptElement.scrollTo({
+    top: transcriptElement.scrollHeight,
+    behavior
   })
 }
 
@@ -376,8 +411,20 @@ function undoChangedFiles(message: ChatMessage): void {
 }
 
 watch(
-  () => [props.messages.length, props.messages[props.messages.length - 1]?.content],
-  scrollToBottom,
+  getMessageScrollSnapshot,
+  (current, previous) => {
+    const isHistoryLoad = Boolean(
+      previous && current.historyLoadRevision !== previous.historyLoadRevision
+    )
+    const isBulkLoad = previous
+      ? Math.abs(current.length - previous.length) > 1 ||
+        (current.length > 1 &&
+          current.firstId !== previous.firstId &&
+          current.lastId !== previous.lastId)
+      : current.length > 1
+
+    void scrollToBottom(isHistoryLoad || isBulkLoad ? 'auto' : 'smooth')
+  },
   { flush: 'post' }
 )
 </script>
@@ -468,13 +515,13 @@ watch(
                       >
                         <div class="activity-shell-header">
                           <span>Shell</span>
-                          <button
-                            type="button"
-                            aria-label="复制命令输出"
+                          <IconButton
+                            label="复制命令输出"
+                            size="sm"
                             @click="copyText(formatShellOutput(event))"
                           >
-                            <Copy :size="14" />
-                          </button>
+                            <Copy />
+                          </IconButton>
                         </div>
                         <pre><code>$ {{ formatCommandText(event) }}
 {{ formatShellOutput(event) }}</code></pre>
@@ -522,9 +569,14 @@ watch(
           :class="{ 'always-visible': message.role === 'assistant' }"
         >
           <span class="message-time">{{ formatMessageTime(message.timestamp) }}</span>
-          <button type="button" class="action-button" @click="copyMessageContent(message.id)">
-            <Copy :size="14" />
-          </button>
+          <IconButton
+            class="action-button"
+            label="复制消息"
+            size="sm"
+            @click="copyMessageContent(message.id)"
+          >
+            <Copy />
+          </IconButton>
         </div>
 
         <!-- Changed Files with Undo -->

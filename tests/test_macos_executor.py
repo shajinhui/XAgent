@@ -184,6 +184,7 @@ class MacOSSandboxExecutorTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(result.exit_code, 127)
         self.assertIn("仅支持 Darwin/macOS", result.stderr)
+        self.assertIn("完全访问模式", result.stderr)
 
     def test_run_without_sandbox_bypasses_sandbox_exec(self) -> None:
         selected_root = Path.cwd()
@@ -235,6 +236,7 @@ class MacOSSandboxExecutorTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(result.exit_code, 71)
         self.assertIn("无法再次应用 macOS Seatbelt profile", result.stderr)
+        self.assertIn("完全访问模式", result.stderr)
 
 
 if __name__ == "__main__":

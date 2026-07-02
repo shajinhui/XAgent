@@ -74,15 +74,15 @@ const workspaceTitle = computed(() => {
 
 <template>
   <header class="titlebar">
-    <button
+    <IconButton
       v-if="!sidebarOpen"
       class="sidebar-toggle floating"
-      type="button"
-      aria-label="打开侧边栏"
+      label="打开侧边栏"
+      size="lg"
       @click="emit('toggleSidebar')"
     >
       <PanelLeft />
-    </button>
+    </IconButton>
 
     <div class="title-copy">
       <span class="app-mark" aria-hidden="true"></span>

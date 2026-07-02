@@ -19,7 +19,12 @@ from server.runtime.session_state import (
     create_websocket_session,
     recover_session_runtime_state,
 )
-from server.views.session_summary import session_display_messages, summarize_session_record
+from server.views.session_summary import (
+    pending_patch_review_event,
+    session_display_messages,
+    summarize_session_record,
+)
+from skills import SkillManager, render_available_skills
 from tools.core.catalog import build_default_registry
 from tools.core.registry import ToolRegistry
 from tools.core.runner import ToolRunner, create_tool_context
@@ -31,6 +36,7 @@ from workspace import (
     WorkspaceValidationError,
 )
 from workspace.instructions import render_system_prompt_with_project_instructions
+from workspace.instructions import resolve_workspace_test_defaults
 from workspace.permission_modes import policy_for_permission_mode
 from workspace.project_config import default_project_policy, load_project_policy
 
@@ -52,6 +58,7 @@ class WebSocketRuntimeContext:
     registry: ToolRegistry
     runner: ToolRunner
     history: ContextManager
+    skill_manager: SkillManager
     permission_mode: PermissionMode = PermissionMode.REQUEST_APPROVAL
     session_persisted: bool = False
     last_diff_tracker: Any = None  # 保存最后一次 turn 的 diff_tracker
@@ -77,9 +84,11 @@ class WebSocketRuntimeContext:
         workspace = workspace_manager.open()
         _apply_permission_mode_to_workspace(workspace, PermissionMode.REQUEST_APPROVAL)
         session_store = _require_session_store(workspace)
+        skill_manager = SkillManager()
         session_id, session_state, registry, runner, history = create_websocket_session(
             workspace,
             system_prompt,
+            skill_manager=skill_manager,
         )
         return cls(
             workspace_manager=workspace_manager,
@@ -91,6 +100,7 @@ class WebSocketRuntimeContext:
             registry=registry,
             runner=runner,
             history=history,
+            skill_manager=skill_manager,
         )
 
     def start_new_session(self) -> Dict[str, Any]:
@@ -103,7 +113,7 @@ class WebSocketRuntimeContext:
             self._auto_summarize_session(self.session_id)
 
         self.session_id, self.session_state, self.registry, self.runner, self.history = (
-            create_websocket_session(self.workspace, self.system_prompt)
+            create_websocket_session(self.workspace, self.system_prompt, skill_manager=self.skill_manager)
         )
         self.session_persisted = False
         self.pending_plan = None
@@ -119,7 +129,7 @@ class WebSocketRuntimeContext:
         self.workspace = next_workspace
         self.session_store = _require_session_store(next_workspace)
         self.session_id, self.session_state, self.registry, self.runner, self.history = (
-            create_websocket_session(self.workspace, self.system_prompt)
+            create_websocket_session(self.workspace, self.system_prompt, skill_manager=self.skill_manager)
         )
         self.session_persisted = False
         self.pending_plan = None
@@ -197,7 +207,21 @@ class WebSocketRuntimeContext:
             self.system_prompt,
             self.workspace,
         )
+        skills_fragment, _warning = render_available_skills(
+            self.skill_manager.load_for_workspace(self.workspace)
+        )
+        if skills_fragment:
+            rendered = f"{rendered}\n\n{skills_fragment}"
         return rendered
+
+    def list_skills(self, *, force_reload: bool = False) -> Dict[str, Any]:
+        """返回当前 workspace 可见 skills。"""
+
+        outcome = self.skill_manager.load_for_workspace(
+            self.workspace,
+            force_reload=force_reload,
+        )
+        return outcome.as_dict()
 
     def refresh_history_system_prompt(self) -> str:
         """刷新历史中的 system prompt，避免 cwd/instructions 变化后上下文过期。"""
@@ -212,6 +236,9 @@ class WebSocketRuntimeContext:
         previous_ctx = self.runner.ctx
         project_policy = self.workspace.project_policy or default_project_policy()
         active_exec_policy = exec_policy if exec_policy is not None else previous_ctx.policy.exec_policy
+        default_test_command, default_test_timeout, default_test_source = resolve_workspace_test_defaults(
+            self.workspace
+        )
         self.runner = ToolRunner(
             self.registry,
             create_tool_context(
@@ -225,13 +252,17 @@ class WebSocketRuntimeContext:
                 permission_profile=project_policy.permission_profile,
                 approval_policy=project_policy.approval_policy,
                 circuit_breaker=previous_ctx.circuit_breaker,
+                skill_resource_resolver=self.skill_manager.resolver,
+                default_test_command=default_test_command,
+                default_test_source=default_test_source,
+                default_test_timeout=default_test_timeout,
             ),
         )
 
     def resume_session_from_disk(
         self,
         session_id: str,
-    ) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    ) -> tuple[List[Dict[str, Any]], Dict[str, Any], Dict[str, Any] | None]:
         """从 transcript 恢复模型上下文，并返回前端可展示的消息和摘要。"""
 
         target_record = self.session_store.get_session(session_id)
@@ -252,6 +283,7 @@ class WebSocketRuntimeContext:
         self.session_id = session_id
         self.session_state = recover_session_runtime_state(session_id, target_events)
         self.registry = build_default_registry()
+        self.skill_manager.load_for_workspace(self.workspace, force_reload=True)
         self.pending_plan = None
         project_policy = self.workspace.project_policy or default_project_policy()
         session_allow_rules = recover_session_allow_rules(
@@ -274,12 +306,16 @@ class WebSocketRuntimeContext:
                 network_policy=project_policy.network_policy,
                 permission_profile=project_policy.permission_profile,
                 approval_policy=project_policy.approval_policy,
+                skill_resource_resolver=self.skill_manager.resolver,
+                default_test_command=project_policy.test_command,
+                default_test_timeout=project_policy.test_timeout,
             ),
         )
         self.session_persisted = True
         return (
             session_display_messages(target_events),
             summarize_session_record(target_record, target_events),
+            pending_patch_review_event(target_events),
         )
 
     def _auto_summarize_session(self, session_id: str) -> None:

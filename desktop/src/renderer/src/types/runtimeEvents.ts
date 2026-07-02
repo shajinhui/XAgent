@@ -32,6 +32,109 @@ export type RuntimeToolMetadata = {
 
 export type RuntimeToolMetadataMap = Record<string, RuntimeToolMetadata>
 
+export type RuntimeSkillPolicy = {
+  allow_implicit_invocation?: boolean
+}
+
+export type RuntimeSkillInstall = {
+  source_type: string
+  source: string
+  installed_at: string
+}
+
+export type RuntimeSkillDependencyStatus = {
+  tools: Array<{
+    name: string
+    available: boolean
+  }>
+  missing_tools: string[]
+}
+
+export type RuntimeInstallableSkill = {
+  id: string
+  name: string
+  description: string
+  source_type: 'github' | string
+  source: string
+  tags: string[]
+  icon?: string
+  dependencies?: Record<string, unknown>
+  dependency_status?: RuntimeSkillDependencyStatus
+  version?: string
+  installed?: boolean
+  installed_path?: string
+  installed_version?: string
+  update_available?: boolean
+  ref?: string
+  path?: string
+}
+
+export type RuntimeSkillMetadata = {
+  name: string
+  description: string
+  path: string
+  scope: string
+  source: string
+  enabled?: boolean
+  short_description?: string
+  icon?: string
+  version?: string
+  policy?: RuntimeSkillPolicy
+  dependencies?: Record<string, unknown>
+  dependency_status?: RuntimeSkillDependencyStatus
+  install?: RuntimeSkillInstall
+}
+
+export type RuntimeSkillLoadError = {
+  path: string
+  message: string
+}
+
+export type RuntimeSkillRegistryError = {
+  source: string
+  message: string
+}
+
+export type RuntimeSkillResource = {
+  resource: string
+  path: string
+  size: number
+}
+
+export type RuntimeSkillSelection = {
+  name: string
+  path: string
+}
+
+export type RuntimeSkillDraft = {
+  path?: string
+  scope: 'repo' | 'user'
+  package_template?: 'basic' | 'standard'
+  name: string
+  description: string
+  short_description?: string
+  icon?: string
+  allow_implicit_invocation: boolean
+  content: string
+}
+
+export type RuntimeSkillImportDraft = {
+  scope: 'repo' | 'user'
+  source_path: string
+}
+
+export type RuntimeSkillInstallDraft = {
+  scope: 'repo' | 'user'
+  source_type: 'github'
+  source: string
+}
+
+export type RuntimeSkillResourceDraft = {
+  skill_path: string
+  resource: string
+  content: string
+}
+
 export type RuntimeWorkspaceTrust = {
   level: 'trusted' | 'untrusted' | 'session_only'
   trust_key: string
@@ -83,6 +186,7 @@ export type RuntimeSessionSummary = {
   last_turn_id: string | null
   message_count: number
   last_message: string
+  workspace?: RuntimeWorkspace
 }
 
 export type RuntimeActivityStepStatus = 'running' | 'waiting' | 'success' | 'error'
@@ -96,6 +200,7 @@ export type RuntimeActivityStepKind =
   | 'permission'
   | 'question'
   | 'web'
+  | 'skill'
   | 'tool'
   | 'error'
 
@@ -182,6 +287,8 @@ export type PlanPendingEvent = RuntimeEventBase & {
   type: 'plan_pending'
   plan_id: string
   content: string
+  summary?: string
+  plan_markdown?: string
   items: RuntimeTaskListItem[]
   model: string
   created_at: number
@@ -249,6 +356,163 @@ export type ToolCallResultEvent = RuntimeEventBase & {
   metadata: Record<string, unknown>
 }
 
+export type RuntimePatchChange = {
+  path: string
+  change_type: 'add' | 'update' | 'delete' | string
+  unified_diff: string
+  additions: number
+  deletions: number
+  move_path?: string | null
+}
+
+export type RuntimePatchTestResult = {
+  patch_id?: string
+  command?: string
+  timeout?: number
+  source?: string
+  changed_paths?: string[]
+  started_at?: number
+  ok?: boolean
+  exit_code?: number | null
+  stdout?: string
+  stderr?: string
+  output?: string
+  duration_seconds?: number
+  error?: string
+  blocked?: boolean
+  category?: string
+}
+
+export type RuntimePatchMetadata = Record<string, unknown> & {
+  partial_apply?: boolean
+  applied_paths?: string[]
+  remaining_paths?: string[]
+  written_paths?: string[]
+  failed_path?: string
+  partially_written?: boolean
+  rolled_back_paths?: string[]
+  rollback_failed_path?: string
+  rollback_remaining_paths?: string[]
+  rollback_partially_written?: boolean
+  failure_stage?: string
+  rollback_failure_stage?: string
+  test_result?: RuntimePatchTestResult
+  test_results?: RuntimePatchTestResult[]
+  test_command?: string
+  test_ok?: boolean
+  test_exit_code?: number | null
+  test_output?: string
+  test_source?: string
+}
+
+export type PatchLifecycleEvent = RuntimeEventBase & {
+  type:
+    | 'patch_proposed'
+    | 'patch_approval_request'
+    | 'patch_applied'
+    | 'patch_rejected'
+    | 'patch_apply_failed'
+    | 'patch_rolled_back'
+  tool: string
+  patch_id: string
+  patch_status?: string
+  summary?: string | null
+  changed_paths: string[]
+  additions?: number | null
+  deletions?: number | null
+  changes: RuntimePatchChange[]
+  metadata: RuntimePatchMetadata
+}
+
+export type SkillsListedEvent = RuntimeEventBase & {
+  type: 'skills_listed'
+  skills: RuntimeSkillMetadata[]
+  errors: RuntimeSkillLoadError[]
+  workspace: RuntimeWorkspace
+}
+
+export type InstallableSkillsListedEvent = RuntimeEventBase & {
+  type: 'installable_skills_listed'
+  installable_skills: RuntimeInstallableSkill[]
+  errors: RuntimeSkillRegistryError[]
+  workspace: RuntimeWorkspace
+}
+
+export type SkillUsedEvent = RuntimeEventBase & {
+  type: 'skill_used'
+  name: string
+  path: string
+  scope: string
+  invocation_type: 'explicit' | 'implicit' | string
+}
+
+export type SkillWarningEvent = RuntimeEventBase & {
+  type: 'skill_warning'
+  message: string
+}
+
+export type SkillLoadedEvent = RuntimeEventBase & {
+  type: 'skill_loaded'
+  skill: RuntimeSkillMetadata
+  content: string
+  workspace: RuntimeWorkspace
+}
+
+export type SkillSavedEvent = RuntimeEventBase & {
+  type: 'skill_saved'
+  action: 'create' | 'update' | 'import' | string
+  skill: RuntimeSkillMetadata
+  skills: RuntimeSkillMetadata[]
+  errors: RuntimeSkillLoadError[]
+  workspace: RuntimeWorkspace
+}
+
+export type SkillDeletedEvent = RuntimeEventBase & {
+  type: 'skill_deleted'
+  action: 'delete' | string
+  skill: RuntimeSkillMetadata
+  skills: RuntimeSkillMetadata[]
+  errors: RuntimeSkillLoadError[]
+  workspace: RuntimeWorkspace
+}
+
+export type SkillErrorEvent = RuntimeEventBase & {
+  type: 'skill_error'
+  message: string
+  workspace?: RuntimeWorkspace
+}
+
+export type SkillResourcesListedEvent = RuntimeEventBase & {
+  type: 'skill_resources_listed'
+  skill: RuntimeSkillMetadata
+  resources: RuntimeSkillResource[]
+  workspace: RuntimeWorkspace
+}
+
+export type SkillResourceLoadedEvent = RuntimeEventBase & {
+  type: 'skill_resource_loaded'
+  skill: RuntimeSkillMetadata
+  resource: RuntimeSkillResource
+  content: string
+  workspace: RuntimeWorkspace
+}
+
+export type SkillResourceSavedEvent = RuntimeEventBase & {
+  type: 'skill_resource_saved'
+  skill: RuntimeSkillMetadata
+  resource: RuntimeSkillResource
+  resources: RuntimeSkillResource[]
+  workspace: RuntimeWorkspace
+}
+
+export type SkillResourceDeletedEvent = RuntimeEventBase & {
+  type: 'skill_resource_deleted'
+  skill: RuntimeSkillMetadata
+  resource: RuntimeSkillResource
+  resources: RuntimeSkillResource[]
+  workspace: RuntimeWorkspace
+}
+
 export type PermissionRequestEvent = RuntimeEventBase & {
   type: 'permission_request'
   tool: string
@@ -292,6 +556,7 @@ export type SessionStateEvent = RuntimeEventBase & {
   message_count?: number
   messages?: RuntimeDisplayMessage[]
   session?: RuntimeSessionSummary | null
+  pending_patch_review?: PatchLifecycleEvent | null
   workspace?: RuntimeWorkspace
 }
 
@@ -351,6 +616,19 @@ export type RuntimeEvent =
   | AssistantTokenEvent
   | ToolCallStartedEvent
   | ToolCallResultEvent
+  | PatchLifecycleEvent
+  | SkillsListedEvent
+  | InstallableSkillsListedEvent
+  | SkillUsedEvent
+  | SkillWarningEvent
+  | SkillLoadedEvent
+  | SkillSavedEvent
+  | SkillDeletedEvent
+  | SkillErrorEvent
+  | SkillResourcesListedEvent
+  | SkillResourceLoadedEvent
+  | SkillResourceSavedEvent
+  | SkillResourceDeletedEvent
   | PermissionRequestEvent
   | PermissionDecisionAckEvent
   | ClarificationRequestEvent
@@ -369,6 +647,7 @@ export type RuntimeClientPacket =
       content: string
       model?: string
       reasoning_effort?: RuntimeReasoningEffort
+      selected_skills?: RuntimeSkillSelection[]
       turn_id?: string
     }
   | {
@@ -384,10 +663,27 @@ export type RuntimeClientPacket =
       turn_id?: string
       model?: string
       reasoning_effort?: RuntimeReasoningEffort
+      selected_skills?: RuntimeSkillSelection[]
     }
   | {
       type: 'plan_cancel'
       plan_id?: string
+      request_id?: string
+      turn_id?: string
+    }
+  | {
+      type: 'apply_patch_review'
+      patch_id: string
+      selected_paths?: string[]
+      test_command?: string
+      test_timeout?: number
+      request_id?: string
+      turn_id?: string
+    }
+  | {
+      type: 'reject_patch_review'
+      patch_id: string
+      reason?: string
       request_id?: string
       turn_id?: string
     }
@@ -413,6 +709,111 @@ export type RuntimeClientPacket =
       type: 'list_sessions'
       request_id?: string
       limit?: number
+      turn_id?: string
+    }
+  | {
+      type: 'list_skills'
+      request_id?: string
+      force_reload?: boolean
+      turn_id?: string
+    }
+  | {
+      type: 'list_installable_skills'
+      request_id?: string
+      force_reload?: boolean
+      turn_id?: string
+    }
+  | {
+      type: 'get_skill'
+      request_id?: string
+      path: string
+      turn_id?: string
+    }
+  | {
+      type: 'create_skill'
+      request_id?: string
+      scope: 'repo' | 'user'
+      name: string
+      description: string
+      short_description?: string
+      icon?: string
+      allow_implicit_invocation?: boolean
+      content?: string
+      package_template?: 'basic' | 'standard'
+      turn_id?: string
+    }
+  | {
+      type: 'import_skill'
+      request_id?: string
+      scope: 'repo' | 'user'
+      source_path: string
+      turn_id?: string
+    }
+  | {
+      type: 'install_skill'
+      request_id?: string
+      scope: 'repo' | 'user'
+      source_type: 'github'
+      source: string
+      turn_id?: string
+    }
+  | {
+      type: 'install_registry_skill'
+      request_id?: string
+      scope: 'repo' | 'user'
+      id: string
+      turn_id?: string
+    }
+  | {
+      type: 'reinstall_skill'
+      request_id?: string
+      path: string
+      turn_id?: string
+    }
+  | {
+      type: 'update_skill'
+      request_id?: string
+      path: string
+      name: string
+      description: string
+      short_description?: string
+      icon?: string
+      allow_implicit_invocation?: boolean
+      content?: string
+      turn_id?: string
+    }
+  | {
+      type: 'delete_skill'
+      request_id?: string
+      path: string
+      turn_id?: string
+    }
+  | {
+      type: 'list_skill_resources'
+      request_id?: string
+      path: string
+      turn_id?: string
+    }
+  | {
+      type: 'get_skill_resource'
+      request_id?: string
+      path: string
+      resource: string
+      turn_id?: string
+    }
+  | {
+      type: 'save_skill_resource'
+      request_id?: string
+      path: string
+      resource: string
+      content: string
+      turn_id?: string
+    }
+  | {
+      type: 'delete_skill_resource'
+      request_id?: string
+      path: string
+      resource: string
       turn_id?: string
     }
   | {

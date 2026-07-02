@@ -17,6 +17,7 @@ export type ActivityStepKind =
   | 'permission'
   | 'question'
   | 'web'
+  | 'skill'
   | 'tool'
   | 'error'
 
@@ -72,13 +73,14 @@ function getActivitySummary(kind: ActivityStepKind, status: ActivityStepStatus):
   if (status === 'waiting') return '等待权限确认'
   if (status === 'error') return '处理遇到问题'
   if (kind === 'command') return '正在运行命令'
+  if (kind === 'skill') return '正在使用 Skill'
   if (kind === 'permission') return '等待权限确认'
   if (kind === 'question') return '正在询问问题'
   return '正在使用工具'
 }
 
 function isProgressToolKind(kind: ActivityStepKind): boolean {
-  return !['permission', 'question', 'thinking'].includes(kind)
+  return !['permission', 'question', 'thinking', 'skill'].includes(kind)
 }
 
 function isPlanningToolName(toolName?: string): boolean {
@@ -213,6 +215,7 @@ export const useChatStore = defineStore('chat', {
     conversationTitleStatus: 'idle' as 'idle' | 'pending' | 'ready' | 'error',
     streamingMessageId: null as number | null,
     activeActivityMessageId: null as number | null,
+    historyLoadRevision: 0,
     pendingTaskListsByTurn: {} as Record<string, RuntimeTaskListItem[]>,
     messages: [] as ChatMessage[]
   }),
@@ -296,6 +299,7 @@ export const useChatStore = defineStore('chat', {
               content: '这个历史会话还没有可展示消息。'
             }
           ]
+      this.historyLoadRevision += 1
     },
 
     getConversationTitleMessages(): ConversationTitleMessage[] {

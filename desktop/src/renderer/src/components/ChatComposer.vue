@@ -1,7 +1,59 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { ChevronDown, ListChecks, Plus, SendHorizontal, Shield } from '@lucide/vue'
-import type { RuntimePermissionMode } from '@renderer/types/runtimeEvents'
+import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
+import {
+  Blocks,
+  Bot,
+  Check,
+  ChevronDown,
+  Code2,
+  FileText,
+  GitBranch,
+  Globe,
+  ListChecks,
+  Plus,
+  Presentation,
+  SendHorizontal,
+  Shield,
+  Table2,
+  Wrench,
+  X
+} from '@lucide/vue'
+import IconButton from '@renderer/components/ui/IconButton.vue'
+import type {
+  RuntimePermissionMode,
+  RuntimeSkillLoadError,
+  RuntimeSkillMetadata
+} from '@renderer/types/runtimeEvents'
+
+type SkillIconCarrier = {
+  name: string
+  description?: string
+  short_description?: string
+  icon?: string
+  tags?: string[]
+}
+
+const SKILL_ICON_COMPONENTS: Record<string, Component> = {
+  agent: Bot,
+  bot: Bot,
+  browser: Globe,
+  chrome: Globe,
+  code: Code2,
+  coding: Code2,
+  document: FileText,
+  docs: FileText,
+  file: FileText,
+  github: GitBranch,
+  git: GitBranch,
+  pdf: FileText,
+  presentation: Presentation,
+  slides: Presentation,
+  spreadsheet: Table2,
+  sheet: Table2,
+  table: Table2,
+  tool: Wrench,
+  utility: Wrench
+}
 
 const props = defineProps<{
   disabled?: boolean
@@ -12,12 +64,18 @@ const props = defineProps<{
   reasoningOptions: string[]
   permissionMode: RuntimePermissionMode
   planModeEnabled: boolean
+  skills: RuntimeSkillMetadata[]
+  selectedSkillPaths: string[]
+  skillsLoading: boolean
+  skillErrors: RuntimeSkillLoadError[]
 }>()
 
 const emit = defineEmits<{
   send: [content: string]
   plan: [content: string]
   'toggle-plan-mode': []
+  'toggle-skill': [skill: RuntimeSkillMetadata]
+  'refresh-skills': [forceReload?: boolean]
   'update:model': [model: string]
   'update:reasoningEffort': [effort: string]
   'update:permissionMode': [mode: RuntimePermissionMode]
@@ -25,19 +83,13 @@ const emit = defineEmits<{
 
 const draft = ref('')
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const toolControlRef = ref<HTMLDivElement | null>(null)
+const permissionControlRef = ref<HTMLDivElement | null>(null)
 const isSubmitting = ref(false)
 const toolMenuOpen = ref(false)
 const permissionMenuOpen = ref(false)
 let submitUnlockTimer: number | null = null
 
-function adjustTextareaHeight(): void {
-  if (!textareaRef.value) return
-
-  textareaRef.value.style.height = 'auto'
-  const scrollHeight = textareaRef.value.scrollHeight
-  const maxHeight = 200 // 最大高度约8行
-  textareaRef.value.style.height = `${Math.min(scrollHeight, maxHeight)}px`
-}
 const reasoningLabels: Record<string, string> = {
   off: '思考 关',
   low: '思考 低',
@@ -57,12 +109,12 @@ const permissionModes: Array<{
   {
     value: 'auto_approve',
     label: '替我审批',
-    description: '常规工作区操作自动继续'
+    description: '非危险工作区操作自动继续'
   },
   {
     value: 'full_access',
     label: '完全访问',
-    description: '不套沙箱，允许访问本机文件和网络'
+    description: '高风险：关闭沙箱并开启网络'
   },
   {
     value: 'custom',
@@ -73,11 +125,31 @@ const permissionModes: Array<{
 const activePermissionMode = computed(
   () => permissionModes.find((mode) => mode.value === props.permissionMode) || permissionModes[0]
 )
+const selectedSkillPathSet = computed(
+  () => new Set(props.selectedSkillPaths.map((path) => normalizeSkillPath(path)))
+)
+const selectedSkills = computed(() =>
+  props.skills.filter((skill) => selectedSkillPathSet.value.has(normalizeSkillPath(skill.path)))
+)
+const visibleSkillErrors = computed(() => props.skillErrors.slice(0, 1))
+
+function normalizeSkillPath(path: string): string {
+  return path.trim().replace(/[\/]+$/, '')
+}
+
+function adjustTextareaHeight(): void {
+  if (!textareaRef.value) return
+
+  textareaRef.value.style.height = 'auto'
+  const scrollHeight = textareaRef.value.scrollHeight
+  const maxHeight = 200 // 最大高度约8行
+  textareaRef.value.style.height = Math.min(scrollHeight, maxHeight) + 'px'
+}
 
 function formatModelLabel(model: string): string {
   const [provider, ...modelParts] = model.split('/')
   const modelName = modelParts.join('/')
-  return modelName ? `${provider} · ${modelName}` : model
+  return modelName ? provider + ' · ' + modelName : model
 }
 
 function formatReasoningLabel(effort: string): string {
@@ -88,6 +160,34 @@ function togglePermissionMenu(): void {
   if (props.disabled) return
   toolMenuOpen.value = false
   permissionMenuOpen.value = !permissionMenuOpen.value
+}
+
+function closeFloatingMenus(): void {
+  toolMenuOpen.value = false
+  permissionMenuOpen.value = false
+}
+
+function elementContainsTarget(element: HTMLElement | null, target: EventTarget | null): boolean {
+  return Boolean(element && target instanceof Node && element.contains(target))
+}
+
+function handleDocumentPointerDown(event: PointerEvent): void {
+  if (toolMenuOpen.value && !elementContainsTarget(toolControlRef.value, event.target)) {
+    toolMenuOpen.value = false
+  }
+
+  if (
+    permissionMenuOpen.value &&
+    !elementContainsTarget(permissionControlRef.value, event.target)
+  ) {
+    permissionMenuOpen.value = false
+  }
+}
+
+function handleDocumentKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    closeFloatingMenus()
+  }
 }
 
 function selectPermissionMode(mode: RuntimePermissionMode): void {
@@ -118,7 +218,62 @@ function unlockSubmitSoon(): void {
 function toggleToolMenu(): void {
   if (props.disabled) return
   permissionMenuOpen.value = false
-  toolMenuOpen.value = !toolMenuOpen.value
+  const nextOpen = !toolMenuOpen.value
+  toolMenuOpen.value = nextOpen
+  if (nextOpen && !props.skills.length && !props.skillErrors.length && !props.skillsLoading) {
+    emit('refresh-skills')
+  }
+}
+
+function isSkillSelected(skill: RuntimeSkillMetadata): boolean {
+  return selectedSkillPathSet.value.has(normalizeSkillPath(skill.path))
+}
+
+function toggleSkill(skill: RuntimeSkillMetadata): void {
+  if (props.disabled || isSubmitting.value) return
+  emit('toggle-skill', skill)
+}
+
+function formatSkillDescription(skill: RuntimeSkillMetadata): string {
+  return (skill.short_description || skill.description || '').trim()
+}
+
+function normalizeIconKey(value: string | undefined): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+function explicitIconText(skill: SkillIconCarrier): string {
+  return String(skill.icon || '').trim()
+}
+
+function skillIconComponent(skill: SkillIconCarrier): Component | null {
+  const explicit = explicitIconText(skill)
+  const explicitKey = normalizeIconKey(explicit)
+  if (explicitKey && SKILL_ICON_COMPONENTS[explicitKey]) {
+    return SKILL_ICON_COMPONENTS[explicitKey]
+  }
+  if (explicit && explicit.length <= 4) {
+    return null
+  }
+
+  const searchable = [skill.name, skill.description, skill.short_description, ...(skill.tags || [])]
+    .join(' ')
+    .toLowerCase()
+
+  for (const [key, component] of Object.entries(SKILL_ICON_COMPONENTS)) {
+    if (searchable.includes(key)) return component
+  }
+  return Blocks
+}
+
+function skillIconText(skill: SkillIconCarrier): string {
+  const explicit = explicitIconText(skill)
+  const compact = skill.name.trim().replace(/\s+/g, '')
+  return explicit || (compact ? compact.slice(0, 2).toUpperCase() : 'SK')
 }
 
 function sendMessage(): void {
@@ -158,39 +313,67 @@ watch(draft, () => {
   adjustTextareaHeight()
 })
 
+onMounted(() => {
+  document.addEventListener('pointerdown', handleDocumentPointerDown)
+  document.addEventListener('keydown', handleDocumentKeydown)
+})
+
 onBeforeUnmount(() => {
   if (submitUnlockTimer) {
     window.clearTimeout(submitUnlockTimer)
   }
+  document.removeEventListener('pointerdown', handleDocumentPointerDown)
+  document.removeEventListener('keydown', handleDocumentKeydown)
 })
 </script>
 
 <template>
   <form class="composer" @submit.prevent="sendMessage">
-    <textarea
-      ref="textareaRef"
-      v-model="draft"
-      :placeholder="placeholder || '输入消息...'"
-      :disabled="disabled || isSubmitting"
-      rows="1"
-      @keydown.enter.exact="handleEnter"
-      @input="adjustTextareaHeight"
-    ></textarea>
+    <div class="composer-input-area">
+      <div v-if="selectedSkills.length" class="composer-selected-plugins" aria-label="已选择插件">
+        <button
+          v-for="skill in selectedSkills"
+          :key="skill.path"
+          class="composer-selected-plugin"
+          type="button"
+          :title="'取消选择 ' + skill.name"
+          :disabled="disabled || isSubmitting"
+          @click.stop="toggleSkill(skill)"
+        >
+          <span class="composer-selected-plugin-icon">
+            <component v-if="skillIconComponent(skill)" :is="skillIconComponent(skill)" />
+            <span v-else>{{ skillIconText(skill) }}</span>
+          </span>
+          <span class="composer-selected-plugin-name">{{ skill.name }}</span>
+          <X class="composer-selected-plugin-remove" />
+        </button>
+      </div>
+      <textarea
+        ref="textareaRef"
+        v-model="draft"
+        :placeholder="placeholder || '输入消息...'"
+        :disabled="disabled || isSubmitting"
+        rows="1"
+        @keydown.enter.exact="handleEnter"
+        @input="adjustTextareaHeight"
+      ></textarea>
+    </div>
 
     <div class="composer-actions">
       <div class="left-tools">
-        <div class="composer-tool-control">
-          <button
+        <div ref="toolControlRef" class="composer-tool-control">
+          <IconButton
             class="composer-plus-button"
-            type="button"
-            aria-label="打开工具菜单"
+            label="打开工具菜单"
+            size="lg"
             :aria-expanded="toolMenuOpen"
             :disabled="disabled || isSubmitting"
             @click="toggleToolMenu"
           >
             <Plus />
-          </button>
+          </IconButton>
           <div v-if="toolMenuOpen" class="composer-tool-menu">
+            <div class="composer-tool-menu-title">Add</div>
             <button
               class="composer-tool-option"
               type="button"
@@ -205,9 +388,36 @@ onBeforeUnmount(() => {
                 <span></span>
               </span>
             </button>
+            <div class="composer-tool-section-label">插件</div>
+            <div v-if="skillsLoading" class="composer-plugin-empty">正在加载</div>
+            <template v-else-if="skills.length">
+              <button
+                v-for="skill in skills"
+                :key="skill.path"
+                class="composer-plugin-option"
+                :class="{ selected: isSkillSelected(skill) }"
+                type="button"
+                :aria-pressed="isSkillSelected(skill)"
+                @click.stop="toggleSkill(skill)"
+              >
+                <span class="composer-plugin-icon">
+                  <component v-if="skillIconComponent(skill)" :is="skillIconComponent(skill)" />
+                  <span v-else>{{ skillIconText(skill) }}</span>
+                </span>
+                <span class="composer-plugin-copy">
+                  <span>{{ skill.name }}</span>
+                  <small>{{ formatSkillDescription(skill) }}</small>
+                </span>
+                <Check v-if="isSkillSelected(skill)" class="composer-plugin-check" />
+              </button>
+            </template>
+            <div v-else class="composer-plugin-empty">暂无插件</div>
+            <div v-if="visibleSkillErrors.length" class="composer-plugin-empty warning">
+              {{ visibleSkillErrors[0].message }}
+            </div>
           </div>
         </div>
-        <div class="permission-mode-control">
+        <div ref="permissionControlRef" class="permission-mode-control">
           <button
             class="permission-mode-trigger"
             :class="{ danger: permissionMode === 'full_access' }"
@@ -268,14 +478,15 @@ onBeforeUnmount(() => {
         </label>
       </div>
 
-      <button
+      <IconButton
         class="send-button"
         type="submit"
-        aria-label="发送消息"
+        label="发送消息"
+        size="lg"
         :disabled="disabled || isSubmitting"
       >
         <SendHorizontal />
-      </button>
+      </IconButton>
     </div>
   </form>
 </template>
