@@ -40,7 +40,11 @@ class TestPromptTemplates(unittest.TestCase):
         self.assertIsInstance(TOOLS_FILE, str)
         self.assertIsInstance(TOOLS_GIT, str)
         self.assertIn("rg", TOOLS_SHELL)
+        self.assertIn("start_process", TOOLS_SHELL)
+        self.assertIn("stop_process", TOOLS_SHELL)
         self.assertIn("edit_file", TOOLS_FILE)
+        self.assertIn("Patch Preview", TOOLS_FILE)
+        self.assertIn("不得宣称修改已经验证成功", TOOLS_FILE)
         self.assertIn("git", TOOLS_GIT)
 
 

@@ -84,6 +84,7 @@ v0.4.0 Change Review Runtime
 - write_file dry_run=true 已接入 patch.diff_builder。
 - write_file dry_run=true 已保存 pending proposal。
 - edit_file dry_run=true 现在也已保存 pending proposal，并返回 patch_id / diff stats。
+- write_file / edit_file 的参数默认值已收紧为 dry_run=true，模型提示默认要求先预览、再 apply；显式 dry_run=false 只作为兼容路径保留。
 - apply_patch / reject_patch 工具骨架已完成。
 - v0.4.0 继续保留 `write_file` / `edit_file` 作为兼容工具名，`dry_run=true` 就是标准 preview 入口；独立 preview alias 不再作为 Stage 4 阻塞项。
 

@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from sandbox.macos_executor import SecureMacOSSandboxExecutor
 from security import FileSystemPolicy, NetworkPolicy
@@ -211,6 +211,59 @@ class MacOSSandboxExecutorTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertFalse(which_mock.called)
         self.assertEqual(run_mock.call_args.args[0][:2], ["/bin/sh", "-lc"])
+
+    def test_timeout_decodes_partial_bytes_output(self) -> None:
+        selected_root = Path.cwd()
+        filesystem_policy = FileSystemPolicy.danger_full_access(selected_root)
+        executor = SecureMacOSSandboxExecutor(selected_root)
+        timeout = subprocess.TimeoutExpired(
+            cmd=["/bin/sh", "-lc", "sample"],
+            timeout=1,
+            output=b"partial stdout \xff",
+            stderr=b"partial stderr \xff",
+        )
+
+        with patch("sandbox.macos_executor.subprocess.run", side_effect=timeout):
+            result = executor.run(
+                "sample",
+                filesystem_policy=filesystem_policy,
+                network_policy=NetworkPolicy.ENABLED,
+                sandbox_enabled=False,
+            )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.exit_code, 124)
+        self.assertIsInstance(result.stdout, str)
+        self.assertIsInstance(result.stderr, str)
+        self.assertIn("partial stdout", result.stdout)
+        self.assertIn("partial stderr", result.stderr)
+        self.assertIn("命令执行超时", result.stderr)
+
+    def test_start_managed_creates_independent_process_group(self) -> None:
+        selected_root = Path.cwd()
+        filesystem_policy = FileSystemPolicy.workspace_write(selected_root)
+        executor = SecureMacOSSandboxExecutor(selected_root)
+        process = Mock(pid=43210)
+
+        with tempfile.NamedTemporaryFile() as output:
+            with (
+                patch("sandbox.macos_executor.platform.system", return_value="Darwin"),
+                patch("sandbox.macos_executor.shutil.which", return_value="/usr/bin/sandbox-exec"),
+                patch("sandbox.macos_executor.subprocess.Popen", return_value=process) as popen_mock,
+            ):
+                result = executor.start_managed(
+                    "python3 -m http.server 8000",
+                    filesystem_policy=filesystem_policy,
+                    network_policy=NetworkPolicy.RESTRICTED,
+                    cwd=selected_root,
+                    output=output,
+                )
+
+        self.assertTrue(result.ok)
+        self.assertIs(result.process, process)
+        self.assertTrue(popen_mock.call_args.kwargs["start_new_session"])
+        self.assertEqual(popen_mock.call_args.kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(popen_mock.call_args.kwargs["stderr"], subprocess.STDOUT)
 
     def test_run_explains_nested_sandbox_failure(self) -> None:
         executor = SecureMacOSSandboxExecutor(Path.cwd())

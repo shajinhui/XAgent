@@ -77,6 +77,9 @@ class ToolRegistryTests(unittest.TestCase):
                 "read_skill_resource",
                 "grep",
                 "run_command",
+                "start_process",
+                "process_status",
+                "stop_process",
                 "web_fetch",
             },
         )
@@ -307,6 +310,107 @@ class ToolRegistryTests(unittest.TestCase):
             self.assertTrue(result.ok)
             self.assertTrue(run_mock.called)
             self.assertIn("exit_code: 0", result.content)
+            self.assertEqual(result.metadata["exit_code"], 0)
+            self.assertFalse(result.metadata["timed_out"])
+
+    def test_run_command_nonzero_exit_returns_failed_tool_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _registry, runner = build_default_runner(root)
+
+            with patch.object(
+                runner.ctx.command_executor,
+                "run",
+                return_value=CommandExecResult(False, 1, "", "build failed\n"),
+            ):
+                result = runner.execute(
+                    "run_command",
+                    json.dumps({"command": "ls -la"}),
+                )
+
+            self.assertFalse(result.ok)
+            self.assertIn("exit_code: 1", result.content)
+            self.assertIn("build failed", result.content)
+            self.assertEqual(result.metadata["exit_code"], 1)
+            self.assertFalse(result.metadata["timed_out"])
+
+    def test_run_command_timeout_returns_failed_tool_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _registry, runner = build_default_runner(root)
+
+            with patch.object(
+                runner.ctx.command_executor,
+                "run",
+                return_value=CommandExecResult(False, 124, "partial", "命令执行超时"),
+            ):
+                result = runner.execute(
+                    "run_command",
+                    json.dumps({"command": "ls -la"}),
+                )
+
+            self.assertFalse(result.ok)
+            self.assertEqual(result.metadata["exit_code"], 124)
+            self.assertTrue(result.metadata["timed_out"])
+
+    def test_run_command_rejects_shell_backgrounding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _registry, runner = build_default_runner(root)
+
+            with patch.object(runner.ctx.command_executor, "run") as run_mock:
+                result = runner.execute(
+                    "run_command",
+                    json.dumps({"command": "nohup python3 -m http.server 8000 >server.log 2>&1 &"}),
+                    approved=True,
+                )
+
+            self.assertFalse(result.ok)
+            self.assertEqual(result.metadata["suggested_tool"], "start_process")
+            run_mock.assert_not_called()
+
+    def test_start_process_requires_explicit_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _registry, runner = build_default_runner(Path(tmp))
+
+            result = runner.execute(
+                "start_process",
+                json.dumps({"command": "python3 -m http.server 8000", "expected_port": 8000}),
+            )
+
+            self.assertFalse(result.ok)
+            self.assertEqual(result.metadata["permission_action"], "ask")
+            self.assertEqual(result.metadata["expected_port"], 8000)
+
+    def test_start_process_uses_runtime_process_manager_after_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _registry, runner = build_default_runner(root)
+            managed = {
+                "process_id": "process-1",
+                "pid": 123,
+                "pgid": 123,
+                "command": "python3 -m http.server 8000",
+                "cwd": root.resolve().as_posix(),
+                "log_path": "/tmp/process-1.log",
+                "started_at": 1.0,
+                "expected_port": 8000,
+                "status": "running",
+                "exit_code": None,
+                "forced_stop": False,
+                "listeners": [],
+            }
+
+            with patch.object(runner.ctx.process_manager, "start", return_value=managed) as start_mock:
+                result = runner.execute(
+                    "start_process",
+                    json.dumps({"command": "python3 -m http.server 8000", "expected_port": 8000}),
+                    approved=True,
+                )
+
+            self.assertTrue(result.ok)
+            self.assertEqual(result.metadata["process_id"], "process-1")
+            self.assertEqual(start_mock.call_args.kwargs["expected_port"], 8000)
 
     def test_run_command_compound_read_only_command_still_requests_permission(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -337,7 +441,7 @@ class ToolRegistryTests(unittest.TestCase):
             self.assertTrue(result.metadata["sandbox_enabled"])
             self.assertFalse(result.metadata["network_enabled"])
 
-    def test_edit_file_dry_run_returns_diff_without_writing(self) -> None:
+    def test_edit_file_defaults_to_patch_preview_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             target = root / "sample.txt"
@@ -352,7 +456,6 @@ class ToolRegistryTests(unittest.TestCase):
                         "start_line": 2,
                         "end_line": 2,
                         "replacement": "BETA",
-                        "dry_run": True,
                     }
                 ),
                 approved=True,
@@ -371,7 +474,7 @@ class ToolRegistryTests(unittest.TestCase):
             self.assertEqual(proposal.status, PatchStatus.PROPOSED)
             self.assertEqual(proposal.changed_paths, ["sample.txt"])
 
-    def test_write_file_dry_run_returns_diff_without_writing(self) -> None:
+    def test_write_file_defaults_to_patch_preview_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             target = root / "sample.txt"
@@ -380,7 +483,7 @@ class ToolRegistryTests(unittest.TestCase):
 
             result = runner.execute(
                 "write_file",
-                json.dumps({"path": "sample.txt", "content": "new\n", "dry_run": True}),
+                json.dumps({"path": "sample.txt", "content": "new\n"}),
                 approved=True,
             )
 
@@ -3263,7 +3366,7 @@ class ToolRegistryTests(unittest.TestCase):
 
             result = runner.execute(
                 "write_file",
-                json.dumps({"path": "created.txt", "content": "hello"}),
+                json.dumps({"path": "created.txt", "content": "hello", "dry_run": False}),
                 approved=True,
             )
 
@@ -3281,7 +3384,7 @@ class ToolRegistryTests(unittest.TestCase):
 
             result = runner.execute(
                 "write_file",
-                json.dumps({"path": "created.txt", "content": "hello"}),
+                json.dumps({"path": "created.txt", "content": "hello", "dry_run": False}),
             )
 
             self.assertTrue(result.ok)
@@ -3306,7 +3409,7 @@ class ToolRegistryTests(unittest.TestCase):
             target = outside / "created.txt"
             result = runner.execute(
                 "write_file",
-                json.dumps({"path": target.as_posix(), "content": "hello"}),
+                json.dumps({"path": target.as_posix(), "content": "hello", "dry_run": False}),
             )
 
             self.assertTrue(result.ok)

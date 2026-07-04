@@ -9,7 +9,8 @@ from pydantic import BaseModel, Field
 from security import ApprovalPolicy
 from security.exec_policy import CommandDecision
 from security.permissions import PermissionProfile
-from tools.core.types import ToolExecutionContext, ToolMeta, ToolPermissionError
+from tools.core.types import ToolExecutionContext, ToolMeta, ToolPermissionError, ToolResult
+from tools.shell.command_syntax import requests_shell_backgrounding
 
 
 META = ToolMeta(
@@ -45,7 +46,7 @@ def schema() -> dict:
     }
 
 
-def run(ctx: ToolExecutionContext, payload: dict) -> str:
+def run(ctx: ToolExecutionContext, payload: dict) -> ToolResult:
     """执行命令前完成 cwd 校验、命令策略判断和用户审批检查。"""
 
     args = RunCommandArgs(**payload)
@@ -64,6 +65,18 @@ def run(ctx: ToolExecutionContext, payload: dict) -> str:
                 "cwd": raw_cwd or ".",
             },
         ) from exc
+
+    if requests_shell_backgrounding(args.command):
+        return ToolResult(
+            ok=False,
+            content="run_command 不支持 nohup 或独立的 &；请使用 start_process 让 Runtime 托管后台进程",
+            metadata={
+                "error_type": "background_process_requires_manager",
+                "command": args.command,
+                "cwd": _display_cwd(ctx, command_cwd),
+                "suggested_tool": "start_process",
+            },
+        )
 
     approved = bool(payload.get("_approved", False))
     decision = ctx.policy.check_command(args.command, approved=approved)
@@ -129,11 +142,22 @@ def run(ctx: ToolExecutionContext, payload: dict) -> str:
     if result.ok:
         ctx.circuit_breaker.record_success(ctx.session_id, "dangerous_shell")
 
-    return (
-        f"cwd: {_display_cwd(ctx, command_cwd)}\n"
+    display_cwd = _display_cwd(ctx, command_cwd)
+    content = (
+        f"cwd: {display_cwd}\n"
         f"exit_code: {result.exit_code}\n"
         f"stdout:\n{result.stdout.strip() or '(empty)'}\n"
         f"stderr:\n{result.stderr.strip() or '(empty)'}"
+    )
+    return ToolResult(
+        ok=result.ok,
+        content=content,
+        metadata={
+            "command": args.command,
+            "cwd": display_cwd,
+            "exit_code": result.exit_code,
+            "timed_out": result.exit_code == 124,
+        },
     )
 
 

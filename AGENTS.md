@@ -14,6 +14,7 @@ This file is the shared context for future agent conversations in this repo.
 - `agent_loop.py` already uses `ToolRegistry` and LangGraph orchestration.
 - Tools are split into individual modules under `tools/`.
 - `run_command` goes through `security/` and `sandbox/macos_executor.py`.
+- `processes/` provides the first Runtime-managed background process slice: `start_process` launches an independent process group through the existing command policy and sandbox boundary, optional `expected_port` checks require the listener to belong to that process group, `process_status` exposes owned status/log tails and read-only listener diagnostics, and `stop_process` accepts only Runtime-issued process ids, sends SIGTERM first, and uses SIGKILL only after timeout.
 - macOS Seatbelt runs approved commands in the real project workspace, derives read/write roots from `FileSystemPolicy`, and keeps network denied by default unless the user explicitly selects full access mode.
 - `server/app.py` is a local event transport / runtime bridge prototype, not the final product UI.
 - `server/` is now split into protocol, runtime, processors, and views modules so `app.py` can focus on WebSocket transport and turn orchestration.
@@ -27,6 +28,7 @@ This file is the shared context for future agent conversations in this repo.
 - WebSocket sessions are initially in memory only; the runtime persists them on the first non-empty `user_input`, so opening the app, switching workspaces, or clicking new chat must not create empty session files.
 - `session/` provides session records, transcript writing, session listing, and model-context recovery.
 - `memory/` provides a transparent file-backed Session/Task Memory first slice under `.codex-mini/memory/`: session summaries, task-state extraction, list/search/forget controls, explicit preference recording, and automatic summarization when leaving an active persisted session. Durable memory is not automatically injected into model prompts yet, and the experimental preference learner is not connected to the write path.
+- `observability/` provides schema-v2 structured local runtime interaction logs under `.codex-mini/logs/runtime-YYYY-MM-DD.jsonl`. Selected transcript events are mirrored with user/agent/model/tool actors; each record exposes searchable `level`, `summary`, and `payload_bytes`. The first model request in a turn records a sanitized full message snapshot, later model loops record only the changed tail, and assistant transcript persistence no longer duplicates the already-recorded `model_response`. Runtime logs are diagnostic copies only: they do not participate in recovery, omit API credentials, `reasoning_content`, and full Skill bodies, and can be disabled with `CODEX_MINI_RUNTIME_LOG_ENABLED=false`.
 - `workspace/` provides the first backend workspace context and validation layer.
 - WebSocket clients can open a validated workspace with `open_workspace`; switching workspaces creates a fresh session, binds the session store to `workspace.project_root`, and keeps tool execution bounded by `workspace.selected_root`.
 - WebSocket clients can send `change_directory` to update `workspace.current_dir` without creating a new session, and `add_dir` to explicitly add read/write additional roots.
@@ -46,6 +48,7 @@ This file is the shared context for future agent conversations in this repo.
 - WebSocket clients can send `plan_request` to generate a pending plan document without starting an implementation turn, then `plan_confirm` to execute the original user request through the normal `user_input` path, or `plan_cancel` to discard the pending plan.
 - The current Plan Mode slice has backend state, transcript events, desktop store plumbing, a persistent composer Plan Mode toggle, an assistant-visible plan document for user review, a lightweight confirm/cancel action card, and confirmed-plan document context injected into model execution and session recovery; plan editing, read-only exploratory planning turns, and stricter step-level execution constraints are not productized yet.
 - Stage 4 patch review has been closed as `v0.4.0 Change Review Runtime`: `patch/` provides immutable patch proposal models, unified diff construction, add/update/delete line statistics, transparent JSON persistence, status transitions, and focused unit tests. `write_file` and `edit_file` now both support `dry_run=true` previews backed by patch proposals, and `apply_patch` / `reject_patch` / `rollback_patch` can apply, reject, or roll back stored proposals through the normal tool approval path. WebSocket patch lifecycle events are wired for proposed / approval request / applied / rejected / failed / rolled_back states and are persisted to transcript. The desktop client has a live `PatchReviewCard.vue` for pending patch review with file list, unified diff, direct apply/reject control packets, apply selected, session resume recovery, optional post-apply test inputs, and apply-failure diagnostics; it also has `PatchResultCard.vue` for independent patch test history display after apply. Stage 4.5 read-only Git review tools are available as `git_status`, `git_diff`, `git_diff_file`, and `git_changed_files`. Stage 4.6 supports explicit `test_command` / `test_timeout`, trusted `.codex-mini/config.toml` `[tests] command` / `timeout`, and AGENTS.md-declared safe default test commands; post-apply tests run through the existing command executor and sandbox boundary, and success/failure/blocked diagnostics are associated with `patch_id` plus the applied changed paths. Stage 4.7 records durable rollback metadata plus partially-written diagnostics (`written_paths` / `rolled_back_paths`, `failed_path`, `remaining_paths`) when apply or rollback fails mid-loop, has dedicated rollback/apply regression coverage for symlink/binary plus `.git` / `.codex-mini` / `.venv` / `__pycache__` protected paths, covers `move_path` / rename + protected path combinations, covers `cross-root move_path` including multi-step partial apply + rollback, simultaneous multi-file moves, multi-writable-additional-root combinations, multi-root failure diagnostics, and partial-apply rollback-failure state reconciliation, covers rename + apply/rollback failure-diagnostics combinations, rejects rename target / restore-path overwrite conflicts, and supports writable-vs-read-only `additional root` patch boundaries plus `additional root + symlink/binary` combinations with the macOS parent-symlink validation bug fixed.
+- The default model-facing write path is now Patch Preview: `write_file` and `edit_file` default to `dry_run=true`; explicit `dry_run=false` remains only as a compatibility escape hatch, and the system prompt requires preview/apply unless the user explicitly requests bypassing review.
 - The overall runtime architecture is now modularized, and the first `WorkspaceContext v2` slice is implemented: `selected_root`, `project_root`, `current_dir`, session-only trust, additional root model, and workspace snapshots are the canonical workspace shape. The old `root` / `allowed_roots` payload fields are not emitted and are not accepted during session resume.
 - Session-scoped command allow rules are written through `permission_decision` transcript events with a workspace snapshot, and resume only restores those rules when the saved permission workspace matches the restored workspace safety boundary; global permission mode is not part of that boundary.
 - `security/permissions.py` now contains the first unified filesystem/permission primitives: `FileSystemPolicy`, `PermissionProfile`, `ApprovalPolicy`, and `NetworkPolicy`; `security/exec_policy.py` contains prefix-based command rules and session allow support.
@@ -57,7 +60,7 @@ This file is the shared context for future agent conversations in this repo.
 - The desktop client is an Electron/Vue shell for chat, tool timeline, approvals, command output, Markdown rendering, and session navigation.
 - The desktop client has native directory picker entries for opening a workspace, changing current directory, and adding an explicit additional root.
 - The desktop title bar shows current workspace trust and provides minimal trust/untrust controls; the chat composer owns the permission mode switcher, while the main sidebar `插件` entry owns the Skills catalog, selection, and lifecycle management panel.
-- The latest full local validation passes 386 unit tests; desktop TypeScript/Vue typecheck and production build also pass.
+- The latest full local validation passes 407 unit tests; desktop TypeScript/Vue typecheck and production build also pass.
 
 ## Important Files
 
@@ -83,6 +86,7 @@ This file is the shared context for future agent conversations in this repo.
 - `context/`: model-visible context fragments for environment, permissions, model, and user input
 - `context_manager/`: model history container and context update/truncation helpers
 - `memory/`: transparent file-backed memory models, storage, summarization, indexing, and keyword search
+- `observability/runtime_log.py`: append-only per-workspace JSONL interaction logger and model-message sanitizer
 - `patch/`: Stage 4 patch proposal models, diff construction, and pending patch JSON store
 - `skills/`: local file-based skills metadata, package spec/validator, install metadata, curated installable registry, loader, catalog renderer, selection logic, manager cache, restricted resource resolver, and explicit user skill management
 - `workspace/models.py`: workspace context types
@@ -101,6 +105,8 @@ This file is the shared context for future agent conversations in this repo.
 - `tools/search/grep.py`: code search tool
 - `tools/git/`: read-only Git review tools (`git_status`, `git_diff`, `git_diff_file`, `git_changed_files`)
 - `tools/shell/run_command.py`: sandboxed command tool
+- `tools/shell/process_control.py`: managed process start/status/stop tool adapters
+- `processes/manager.py`: workspace-scoped process registry, log access, port ownership checks, and safe process-group shutdown
 - `tools/network/web_fetch.py`: public HTTP/HTTPS web fetch tool
 - `tools/interaction/ask_user.py`: model-initiated clarification tool
 - `tools/patching/`: mutating patch review tools for applying, rejecting, or rolling back stored patch proposals
@@ -111,6 +117,7 @@ This file is the shared context for future agent conversations in this repo.
 - `security/circuit_breaker.py`: rejection counter
 - `sandbox/macos_executor.py`: macOS Seatbelt command executor
 - `docs/PROJECT_ARCHITECTURE_STATUS.md`: detailed architecture/status log
+- `docs/RUNTIME_LOGGING.md`: runtime log location, event schema, safety boundary, and usage
 - `docs/STAGE4_CHANGE_REVIEW_RUNTIME.md`: Stage 4 Change Review Runtime execution plan
 - `docs/SKILLS_ARCHITECTURE.md`: current Skills module architecture, loading flow, runtime injection flow, management flow, and safety boundaries
 - `docs/SKILLS_QUICKSTART.md`: minimal run/use guide for creating, selecting, and using skills
@@ -123,16 +130,20 @@ This file is the shared context for future agent conversations in this repo.
 
 - `read_file` and `grep` are read-only helpers.
 - `read_skill` and `read_skill_resource` are read-only skill-context helpers; they must only read currently cataloged skills or resources inside the selected skill directory, and they must not expand `FileSystemPolicy`.
-- `write_file` and `edit_file` mutate the real repo and should stay protected; both support `dry_run=true` to preview a unified diff without writing.
+- `write_file` and `edit_file` default to `dry_run=true` and create patch proposals without touching source. Explicit `dry_run=false` still mutates the real repo as a compatibility path and must remain protected.
 - `patch/` provides the review-domain backend primitives; `tools/patching/` currently applies, rejects, or rolls back stored proposals, including selected file subsets, and `apply_patch` can run an explicitly supplied, trusted-config, or AGENTS.md-declared safe post-apply `test_command` through the normal command executor / sandbox path while storing diagnostics on the patch metadata. Apply/rollback preflight uses `git apply --check` when available, rejects symlink and binary / non-UTF-8 targets, and persists partially-written diagnostics (`written_paths` / `rolled_back_paths`, `failed_path`, `remaining_paths`) if a write loop fails mid-way. `server/runtime/turn_runner.py` emits transcript-backed WebSocket patch lifecycle events, and `server/views/session_summary.py` restores pending patch review on session resume. Desktop has a live `PatchReviewCard.vue` for pending diff review and `PatchResultCard.vue` for independent patch test history.
 - `tools/git/` exposes read-only review helpers for status, scoped diff, single-file diff, and changed-file listing; it does not commit, push, checkout, or create PRs.
 - `run_command` is the riskiest path and must keep going through policy; it uses macOS Seatbelt except in explicit `full_access` mode.
+- `run_command` must return `ToolResult(ok=False)` for every non-zero exit code, including timeout 124; timeout stdout/stderr must be decoded to text before entering tool results or transcripts.
+- `run_command` must reject shell-managed backgrounding (`nohup` or standalone `&`). Long-running services use `start_process`; raw `kill` / `pkill` / `killall` commands stay denied, and only `stop_process` may terminate a Runtime-owned process id.
 - `run_tests` also executes code and must stay on the sandboxed command-executor path instead of using raw subprocess calls.
 - `run_command` may auto-allow narrow read-only exploration commands, including safe `find ... | sort` pipelines and read-only Git queries such as `git status`, `git log`, and `git diff`; mutating Git commands, mutating `find` options, parent/external paths, redirection, and shell chaining still require approval.
 - Permission modes are explicit global runtime choices: `request_approval` asks before mutations, `auto_approve` auto-approves non-dangerous workspace operations, `full_access` disables Seatbelt and enables network access, and `custom` uses trusted `.codex-mini/config.toml`.
 - `web_fetch` can fetch normal public HTTP/HTTPS pages without approval, but must reject localhost, private IPs, non-public resolved addresses, and non-Web protocols.
 - Protected paths such as `.env`, `.git`, `.codex-mini`, `.venv`, and `__pycache__` should not be written; `.env` should not be read by file tools.
 - `.codex-mini/sessions/` contains local runtime state and should be treated as generated data, not product source.
+- `.codex-mini/logs/` contains raw local interaction diagnostics and must not be committed. It may contain user messages, ordinary tool results, source snippets, and command output even though structured credentials, hidden reasoning, and full Skill content are omitted.
+- Runtime log schema v2 keeps the first `model_request` snapshot in each turn complete and writes later requests as `message_snapshot.mode=delta`; consumers reconstruct a delta by retaining the first `base_message_count` messages from the previous request and replacing its tail with the logged `messages` array.
 - Do not persist or restore `reasoning_content` into recovered model context. Active in-memory turns may keep assistant `reasoning_content` only when that assistant message has `tool_calls`, because DeepSeek requires it for later tool-call context stitching.
 - Do not persist full `SKILL.md` bodies or skill resource contents as durable memory; transcript should keep `skill_used` / `skill_warning` events and omit full skill tool content from recovery.
 - Keep the desktop client thin: Python runtime owns tool execution, policy, transcript persistence, and recovery.
@@ -163,7 +174,7 @@ This file is the shared context for future agent conversations in this repo.
 
 ```bash
 .venv/bin/python -m unittest discover -s tests
-.venv/bin/python -m compileall agent_loop.py tools security sandbox server session workspace skills patch tests
+.venv/bin/python -m compileall agent_loop.py tools security sandbox server session workspace skills patch memory observability processes tests
 make run
 make run-server
 make clean-sessions

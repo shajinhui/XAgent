@@ -132,6 +132,18 @@ class SecurityPolicyTests(unittest.TestCase):
             self.assertEqual(decision.action, "deny")
             self.assertEqual(decision.category, "dangerous_shell")
 
+    def test_check_command_denies_raw_process_termination(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            policy = SecurityPolicy(Path(tmp))
+
+            direct = policy.check_command("kill -9 12345", approved=True)
+            pipeline = policy.check_command("lsof -ti:50000 | xargs kill -9", approved=True)
+
+            self.assertEqual(direct.action, "deny")
+            self.assertEqual(direct.category, "dangerous_shell")
+            self.assertEqual(pipeline.action, "deny")
+            self.assertEqual(pipeline.category, "dangerous_shell")
+
     def test_check_command_asks_for_non_allowlisted_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             policy = SecurityPolicy(Path(tmp))

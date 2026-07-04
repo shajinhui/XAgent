@@ -2,9 +2,10 @@
 
 使用文件操作工具时，遵循以下准则：
 
-- 使用 `edit_file` 工具修改现有文件，使用 `write_file` 创建新文件
-- `edit_file` 支持 `dry_run=true` 参数来预览统一差异而不实际写入
-- 不要在调用 `edit_file` 或 `write_file` 后重新读取文件来验证，工具会在失败时报错
+- 使用 `edit_file` 修改现有文件、使用 `write_file` 创建新文件；两者默认生成 Patch Preview，不直接写入源码
+- 检查预览 diff 后，通过 `apply_patch` 应用已确认的 proposal；只有用户明确要求绕过审查时才显式使用 `dry_run=false`
+- 不要把工具未报错或 `read_file` 的文本外观当成验证；应用后运行与变更匹配的格式化、构建或测试
+- 命令非零退出、超时、被阻止或未执行时，不得宣称修改已经验证成功
 - 受保护的路径（如 `.env`、`.git`、`.codex-mini`、`.venv`、`__pycache__`）不应被写入
 - `.env` 文件不应被文件工具读取
 - 编辑文件时默认使用 ASCII，除非有明确理由且文件已经使用非 ASCII 字符

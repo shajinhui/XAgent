@@ -11,6 +11,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
+from observability import build_model_message_snapshot, write_runtime_log
 from server.protocol.events import build_event
 from server.runtime.model_config import ModelRequestConfig, configure_litellm_environment
 from server.runtime.model_stream import (
@@ -564,15 +565,49 @@ async def run_turn(
     history = turn_context.history
     session_state: SessionRuntimeState = turn_context.session_state
     model_config: ModelRequestConfig = turn_context.model.request_config
+    model_iteration = 0
+    previous_logged_model_messages: list[dict[str, Any]] | None = None
 
     while True:
+        model_iteration += 1
+        model_messages = turn_context.model_messages()
+        message_snapshot, previous_logged_model_messages = build_model_message_snapshot(
+            model_messages,
+            previous_logged_model_messages,
+        )
+        write_runtime_log(
+            session_store.project_root,
+            "model_request",
+            {
+                "iteration": model_iteration,
+                "model_config": model_config.as_dict(),
+                "message_snapshot": message_snapshot,
+                "tools": [item["function"]["name"] for item in registry.schemas()],
+            },
+            session_id=session_id,
+            turn_id=turn_id,
+            source="model",
+            actor="agent",
+        )
         message = await stream_model_message(
             ws,
             registry,
-            turn_context.model_messages(),
+            model_messages,
             session_id,
             turn_id,
             model_config,
+        )
+        write_runtime_log(
+            session_store.project_root,
+            "model_response",
+            {
+                "iteration": model_iteration,
+                **assistant_transcript_payload(message, turn_id),
+            },
+            session_id=session_id,
+            turn_id=turn_id,
+            source="model",
+            actor="model",
         )
         history.append_assistant_message(message)
         record_transcript_event(
@@ -580,6 +615,8 @@ async def run_turn(
             session_id,
             "assistant_message",
             assistant_transcript_payload(message, turn_id),
+            # 同一内容已作为 model_response 写入运行日志，transcript 仍正常持久化。
+            mirror_runtime_log=False,
         )
 
         tool_calls = message.get("tool_calls") or []

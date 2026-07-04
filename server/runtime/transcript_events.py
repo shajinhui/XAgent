@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from observability import write_runtime_log
 from session import SessionStore
 from tools.core.types import ToolResult
 
@@ -13,10 +14,22 @@ def record_transcript_event(
     session_id: str,
     event_type: str,
     payload: Dict[str, Any] | None = None,
+    *,
+    mirror_runtime_log: bool = True,
 ) -> None:
-    """向 session store 追加 transcript event。"""
+    """追加 transcript event，并镜像到 workspace 运行日志。"""
 
-    store.append_event(session_id, event_type, payload or {})
+    event_payload = payload or {}
+    store.append_event(session_id, event_type, event_payload)
+    if not mirror_runtime_log:
+        return
+    write_runtime_log(
+        store.project_root,
+        event_type,
+        event_payload,
+        session_id=session_id,
+        source="transcript",
+    )
 
 
 def assistant_transcript_payload(message: Dict[str, Any], turn_id: str) -> Dict[str, Any]:

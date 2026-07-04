@@ -26,7 +26,7 @@ class EditFileArgs(BaseModel):
     start_line: int = Field(..., ge=1, description="起始行（1-based）")
     end_line: int = Field(..., ge=1, description="结束行（1-based, 包含）")
     replacement: str = Field(..., description="替换文本")
-    dry_run: bool = Field(False, description="为 true 时只返回预览 diff，不写入文件")
+    dry_run: bool = Field(True, description="默认只生成预览 diff；显式为 false 时才直接写入")
 
 
 def schema() -> dict:
@@ -36,7 +36,7 @@ def schema() -> dict:
         "type": "function",
         "function": {
             "name": "edit_file",
-            "description": "按行范围替换文件内容",
+            "description": "按行范围生成文件修改预览；默认不直接写入",
             "parameters": EditFileArgs.model_json_schema(),
         },
     }

@@ -8,6 +8,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 from security.permissions import FileSystemPolicy, NetworkPolicy
 
@@ -27,6 +28,15 @@ class CommandExecResult:
     ok: bool
     exit_code: int
     stdout: str
+    stderr: str
+
+
+@dataclass
+class CommandStartResult:
+    """受管理后台命令的启动结果。"""
+
+    ok: bool
+    process: subprocess.Popen[bytes] | None
     stderr: str
 
 
@@ -178,12 +188,7 @@ class SecureMacOSSandboxExecutor:
                 timeout=timeout_seconds or self.timeout_seconds,
             )
         except subprocess.TimeoutExpired as exc:
-            return CommandExecResult(
-                False,
-                124,
-                exc.stdout or "",
-                (exc.stderr or "") + "\n命令执行超时",
-            )
+            return _timeout_result(exc)
         except OSError as exc:
             return CommandExecResult(False, 127, "", f"macOS 沙箱执行失败: {exc}")
 
@@ -200,6 +205,64 @@ class SecureMacOSSandboxExecutor:
             proc.stdout,
             stderr,
         )
+
+    def start_managed(
+        self,
+        command: str,
+        *,
+        filesystem_policy: FileSystemPolicy,
+        network_policy: NetworkPolicy,
+        cwd: Path,
+        output: BinaryIO,
+        sandbox_enabled: bool = True,
+    ) -> CommandStartResult:
+        """启动独立进程组并立即返回，由上层 ProcessManager 管理生命周期。"""
+
+        if not self.selected_root.exists() or not self.selected_root.is_dir():
+            return CommandStartResult(False, None, f"所选工作区无效: {self.selected_root}")
+
+        try:
+            command_cwd = filesystem_policy.resolve_command_cwd(cwd)
+        except (PermissionError, ValueError) as exc:
+            return CommandStartResult(False, None, f"命令工作目录无效: {exc}")
+
+        shell_command = f"set -eu; cd {shlex.quote(command_cwd.as_posix())}; {command}"
+        argv = ["/bin/sh", "-lc", shell_command]
+        if sandbox_enabled:
+            if platform.system() != "Darwin":
+                return CommandStartResult(
+                    False,
+                    None,
+                    "macOS 原生沙箱仅支持 Darwin/macOS；当前环境不能启动受管理进程。"
+                    "如需继续，请显式切换到完全访问模式。",
+                )
+            sandbox_exec = shutil.which(self.sandbox_exec_path) or shutil.which("sandbox-exec")
+            if not sandbox_exec:
+                return CommandStartResult(
+                    False,
+                    None,
+                    "sandbox-exec 不可用，无法启动受管理进程。"
+                    "如需继续，请显式切换到完全访问模式。",
+                )
+            argv = [
+                sandbox_exec,
+                "-p",
+                self._profile(filesystem_policy, network_policy),
+                *argv,
+            ]
+
+        try:
+            process = subprocess.Popen(
+                argv,
+                cwd=command_cwd,
+                stdin=subprocess.DEVNULL,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            return CommandStartResult(False, None, f"受管理进程启动失败: {exc}")
+        return CommandStartResult(True, process, "")
 
     def _run_without_sandbox(
         self,
@@ -218,12 +281,7 @@ class SecureMacOSSandboxExecutor:
                 timeout=timeout_seconds or self.timeout_seconds,
             )
         except subprocess.TimeoutExpired as exc:
-            return CommandExecResult(
-                False,
-                124,
-                exc.stdout or "",
-                (exc.stderr or "") + "\n命令执行超时",
-            )
+            return _timeout_result(exc)
         except OSError as exc:
             return CommandExecResult(False, 127, "", f"命令执行失败: {exc}")
 
@@ -242,6 +300,28 @@ def _writable_sandbox_paths(filesystem_policy: FileSystemPolicy) -> tuple[Path, 
         DEV_NULL,
     )
     return tuple(_dedupe_existing(paths))
+
+
+def _timeout_result(exc: subprocess.TimeoutExpired) -> CommandExecResult:
+    """把超时异常中的 bytes/str 输出统一收敛为文本结果。"""
+
+    stdout = _decode_process_output(exc.stdout)
+    stderr = _decode_process_output(exc.stderr)
+    separator = "\n" if stderr else ""
+    return CommandExecResult(
+        False,
+        124,
+        stdout,
+        f"{stderr}{separator}命令执行超时",
+    )
+
+
+def _decode_process_output(value: str | bytes | None) -> str:
+    """subprocess 超时输出即使启用 text=True 也可能仍是 bytes。"""
+
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value or ""
 
 
 def _dedupe_existing(paths: tuple[Path, ...]) -> list[Path]:

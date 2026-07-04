@@ -12,13 +12,16 @@ XCode 是一个 Python 版 Codex 类本地 Agent 学习项目，目前正处于�
 - 工具层已经拆成 `tools/core/` 核心层和按领域组织的工具包。
 - 安全策略、命令白名单、危险命令拦截和熔断器已经有第一版实现。
 - `run_command` 已改为通过 macOS 原生沙箱在真实项目 workspace 中执行。
+- 受管理后台进程已有第一片：`start_process` 通过同一命令策略和 sandbox 边界启动独立进程组，`expected_port` 会在启动前拒绝已占用端口并在启动后核对 listener 进程组归属；`process_status` 查询自有进程、日志尾部和端口 listener，`stop_process` 只接受 Runtime 发放的 process id，并按 SIGTERM -> 超时后 SIGKILL 的顺序停止。
 - FastAPI WebSocket 服务已经作为本地事件传输原型接入，但它的最终角色应是桌面客户端/IDE 扩展的 runtime bridge。
 - WebSocket runtime contract 已有第一版：schema version、session state、真实 streaming、权限确认重试、session 挂起/阻断/恢复、session 创建/列表/磁盘恢复、基于首条用户提问的模型标题。
 - 会话持久化已有第一版：`.codex-mini/sessions/index.sqlite` 作为索引，`transcripts/*.jsonl` 作为 append-only 事件流。
 - 透明文件型 Memory 已有第一片：`memory/` 提供 Session/Task Memory 存储、transcript 摘要、任务状态提取、索引和关键词搜索；WebSocket 支持显式 summarize/list/search/forget/remember preference，并会在离开已持久化活动会话时自动生成摘要。当前尚未把 durable memory 自动注入模型 prompt，实验性的偏好 learner 也没有接入写入链路。
+- 运行日志已升级到 schema v2：`observability/runtime_log.py` 会把选定 transcript 事件镜像到 `.codex-mini/logs/runtime-YYYY-MM-DD.jsonl`，并额外记录模型请求增量快照和模型可见响应；日志通过 actor/session/turn/request id 串联 user、agent、model 和 tool，提供 `level`、`summary`、`payload_bytes` 检索字段，且不会写入 API credential、`reasoning_content` 或完整 Skill 内容。
 - workspace 后端骨架已有第一版：验证用户选择的工作区目录，并在 `open_workspace` 时重建 session store、tool registry 和 workspace payload。
 - Skills 可扩展 MVP 已有第一版：`skills/` 作为独立上下文能力层，支持本地 repo/user 文件型 skills，系统提示只展示 bounded catalog metadata，完整 `SKILL.md` 与相对资源通过受限只读 wrapper 按需读取；桌面端可通过显式用户控制事件新增、导入、GitHub 安装/重新安装、从 curated registry 安装、从 registry 可更新条目直接触发重新安装、编辑和删除 repo/user skills，并管理标准资源目录内的 skill resource 文件；本地 skill package spec/validator、标准 package 创建模板、authoring guide、validator-covered 示例包、安装来源记录、GitHub token header、`version` / `metadata.icon` catalog 字段、registry 已安装标记、`update_available` 提示和 `dependencies.tools` 展示检查，以及 `openai/skills` curated registry loader 已开始落地。
 - Stage 4 patch review 已按 `v0.4.0 Change Review Runtime` 收口：`patch/` 提供 patch proposal 模型、unified diff 构造、add/update/delete 统计、状态转换和透明 JSON 存储；`write_file` 与 `edit_file` 的 `dry_run=true` 都会生成 pending proposal；`tools/patching/` 提供 `apply_patch` / `reject_patch` / `rollback_patch`，通过普通工具审批路径应用、拒绝或回滚 stored proposal，并支持 selected file subset。WebSocket patch lifecycle events 已接入 proposed / approval request / applied / rejected / failed / rolled_back 状态，并写入 transcript；桌面端当前已有最小 live `PatchReviewCard.vue` 负责 pending review，也新增 `PatchResultCard.vue` 展示独立 patch 测试历史。Stage 4.5 read-only Git review tools 已接入 `git_status`、`git_diff`、`git_diff_file` 和 `git_changed_files`；Stage 4.6 已让 `apply_patch` 支持显式 `test_command`、trusted config `[tests]` 和 AGENTS.md 默认测试命令，测试结果关联 `patch_id` 和本次 changed paths 写入 metadata / patch store，并进入桌面 activity / system message / result card 展示；Stage 4.7 已让 patch proposal 记录 `original_changes` / `applied_changes`、durable rollback 元数据，以及 apply / rollback 过程中的 partially-written diagnostics，因此 partial apply 后也能按 `patch_id` durable rollback，并在失败时保留可追踪的 `written_paths` / `rolled_back_paths`、`failed_path` 和 `remaining_paths`；同时 `.git`、`.codex-mini`、`.venv`、`__pycache__` 的 apply / rollback 拒绝回归测试、`move_path` / rename + protected path 组合回归测试、`cross-root move_path`、多文件 simultaneous cross-root move、multiple writable additional roots 组合、rename + apply/rollback failure diagnostics、partial-apply rollback-failure state reconciliation、多文件 `partial apply + cross-root move_path` 回归测试、跨多 roots 的失败诊断链路，以及 `additional root` read/write 与 `additional root + symlink/binary` 组合测试也已补上，并修复了 macOS external additional root 会被父级 symlink 误判为非法 patch 路径的问题。
+- 模型默认写入路径已收紧为 Patch Preview：`write_file` / `edit_file` 默认 `dry_run=true`，显式 `dry_run=false` 只作为兼容直接写入路径；系统提示要求检查 diff、应用 proposal，并在构建或测试成功前不得宣称修复完成。
 - `run_command.cwd` 已有第一版：命令可以在 workspace 内部子目录执行，但 cwd 不会扩大 sandbox 写入边界。
 - workspace/permission 专题架构已有目标文档，且 `WorkspaceContext v2`、统一 filesystem policy、network policy、policy-driven Seatbelt、prefix exec policy、permission mode 和 trust-gated project config 第一片已落地：`selected_root`、`project_root`、`current_dir`、session-only/trusted trust model、additional root model、workspace snapshot、`PermissionMode`、`FileSystemPolicy`、`PermissionProfile`、`ApprovalPolicy`、`NetworkPolicy` 和 `ExecPolicy` 已进入代码。
 - Stage 5 `Permission Mode / Sandbox Policy Lite` 第一片已落地：保留现有 `request_approval` / `auto_approve` / `full_access` / `custom` 模式；权限弹窗会展示原因、cwd、permission profile、网络/沙箱状态和建议的 session prefix；composer 与权限弹窗会明确提示 `full_access` 风险；非 macOS、Seatbelt 缺失和嵌套沙箱失败也有可理解的错误说明。persistent allowlist、策略编辑器、domain network rules 和 Git commit/PR 自动化仍不在本片范围内。
@@ -35,6 +38,8 @@ XCode 是一个 Python 版 Codex 类本地 Agent 学习项目，目前正处于�
 - `skills/` 已作为独立上下文域落地，不放入 `tools/`；`tools/skills/` 只提供受限读取 wrapper，不承载 catalog/selection/resource/management 的核心逻辑。
 - `patch/` 已作为 Stage 4 修改审查域的后端底座单独落地，不混入 filesystem tools、WebSocket transport 或 session store。
 - `memory/` 已作为透明文件型记忆域落地，存储、摘要、索引和搜索不混入 transcript store 或 model runtime；自动 prompt 注入仍是后续边界。
+- `observability/` 已作为诊断域落地，运行日志不参与 transcript recovery、memory 检索或权限决策，写入失败也不能中断模型回合。
+- `processes/` 已作为后台进程生命周期域落地，只登记当前 Runtime 实际启动并持有 Popen handle 的进程，不接管未知 PID；端口检查和日志读取也留在该域，不混入 WebSocket transport。
 - `tools/patching/` 只承载 apply/reject 这类模型可调用动作，proposal 模型、diff 生成和存储仍归 `patch/`。
 - `session/`、`workspace/`、`security/`、`sandbox/` 已经成为可继续演进的后端域模块。
 
@@ -94,6 +99,10 @@ workspace/permission 已经开始 v2 落地，目前完成了 workspace 身份�
 │   ├── indexer.py
 │   ├── search.py
 │   └── learner.py
+├── observability/
+│   └── runtime_log.py
+├── processes/
+│   └── manager.py
 ├── tools/
 │   ├── __init__.py
 │   ├── core/
@@ -111,7 +120,8 @@ workspace/permission 已经开始 v2 落地，目前完成了 workspace 身份�
 │   ├── search/
 │   │   └── grep.py
 │   ├── shell/
-│   │   └── run_command.py
+│   │   ├── run_command.py
+│   │   └── process_control.py
 │   ├── network/
 │   │   └── web_fetch.py
 │   ├── git/
@@ -190,6 +200,7 @@ workspace/permission 已经开始 v2 落地，目前完成了 workspace 身份�
 │   └── test_tool_registry.py
 ├── docs/
 │   ├── PROJECT_ARCHITECTURE_STATUS.md
+│   ├── RUNTIME_LOGGING.md
 │   ├── SKILLS_ARCHITECTURE.md
 │   ├── SKILLS_QUICKSTART.md
 │   └── SKILL_AUTHORING_GUIDE.md
@@ -281,6 +292,20 @@ CLI 版 Agent 主循环。
 - mutating 工具通过 `ToolInvocation.diff_tracker` 记录本轮 touched paths。
 - `TurnContext.model_messages()` 会在当前用户消息前动态插入本轮显式 skill 注入；这些注入不写回长期 `history.messages`。
 
+### `observability/`
+
+运行日志是独立于 transcript 和 memory 的诊断副本，详细格式与查看方式见
+`docs/RUNTIME_LOGGING.md`。
+
+当前状态：
+
+- `record_transcript_event()` 会把 user/tool/permission/session 等持久事件镜像为 JSONL 日志；assistant 仍写 transcript，但不再重复镜像已经存在的 `model_response`。
+- `run_turn()` 会在每次 model -> optional tools -> model 循环中记录 `model_request` 与 `model_response`。同一 turn 的首个 request 保存完整消息快照，后续 request 使用 `base_message_count + messages` 记录变化尾部，避免长工具链反复落盘全部历史。
+- 当前 runtime log schema 为 v2；记录顶层包含 `level`、`summary` 和 `payload_bytes`，可直接筛选失败工具并定位异常大的事件。
+- 日志按 workspace 和本地日期写入 `.codex-mini/logs/runtime-YYYY-MM-DD.jsonl`，目录与文件分别使用 `0700` / `0600`。
+- 日志保留普通对话、工具参数和结果，但递归移除 `reasoning_content` 和结构化 credential 字段，并用占位文本替代完整 Skill 注入/读取内容。
+- `CODEX_MINI_RUNTIME_LOG_ENABLED=false` 可关闭新日志写入；关闭日志不会影响 transcript 或 resume。
+
 ### `skills/`
 
 Skills 是独立于工具系统的上下文能力层，第一版只支持本地文件型 skills。
@@ -324,7 +349,7 @@ Patch 是 Stage 4 “修改可审查”能力的独立后端域，第一片只�
 当前状态：
 
 - 已有 focused unit tests 覆盖 update/add/delete diff 标签、增删行统计、proposal JSON round-trip、状态过滤和 patch id 越界拒绝。
-- `write_file` 已有 `dry_run=true` preview；`edit_file` 既有 dry-run 仍保留，但二者尚未升级为默认 patch review 流程。
+- `write_file` / `edit_file` 已默认进入 `dry_run=true` Patch Preview；显式 `dry_run=false` 仅作为兼容直接写入路径保留。
 - 已新增 `apply_patch` / `reject_patch` / `rollback_patch` 工具，覆盖 apply、reject、rollback、policy recheck、显式 post-apply test command 和 trusted config test command 测试。
 - 已新增 WebSocket patch lifecycle 事件，并写入 transcript；桌面端已在现有 activity/system message 中展示 patch 状态，并新增最小 live `PatchReviewCard.vue` 展示 pending patch diff。`apply_patch_review` / `reject_patch_review` control packet 可直接处理卡片按钮，`session_resumed.pending_patch_review` 可恢复待审查卡片，apply selected 会把已应用文件从 pending proposal 中移除并保留剩余文件继续 review。
 - `apply_patch` 已支持调用方显式传入 `test_command` / `test_timeout`，也能使用 trusted `.codex-mini/config.toml` 中的 `[tests] command` / `timeout` 作为默认 post-apply 测试命令；命令通过现有 command executor 和 sandbox 边界运行。测试成功、失败或被安全策略拒绝都会以 `patch_id` + 本次 changed paths 为边界写入工具 metadata 和 patch proposal metadata；桌面端 patch review 卡片和 patch lifecycle 时间线已能展示这些测试结果。
@@ -366,6 +391,9 @@ Patch 是 Stage 4 “修改可审查”能力的独立后端域，第一片只�
 - `git_changed_files`
 - `grep`
 - `run_command`
+- `start_process`
+- `process_status`
+- `stop_process`
 - `web_fetch`
 
 当前状态：
@@ -461,7 +489,7 @@ append-only JSONL transcript 读写器。
 
 - 使用 Pydantic 校验参数。
 - 支持覆盖写入和追加写入。
-- 支持 `dry_run=true`，返回 unified diff 预览且不创建目录、不写入文件。
+- 默认 `dry_run=true`，返回 unified diff 预览且不创建目录、不写入文件。
 - 写入前会通过路径策略检查。
 - 写入前会检查受保护路径。
 - 工具元信息标记为 mutating，并要求上层确认。
@@ -472,7 +500,7 @@ append-only JSONL transcript 读写器。
 - WebSocket 主路径会在写入前发出权限确认，批准后才重试执行。
 - CLI 目前没有交互式权限确认，遇到该工具会收到权限错误文本。
 - `dry_run` 仍走同一套写路径校验和审批策略，避免预览绕过安全边界。
-- 非 dry-run 路径仍是批准后直接写入；后续应纳入 mutating tool patch review 调度策略。
+- 显式 `dry_run=false` 仍可在批准后直接写入，作为兼容逃生口；模型提示默认禁止在用户未明确要求时绕过 Patch Preview。
 
 ### `tools/filesystem/edit_file.py`
 
@@ -487,7 +515,7 @@ append-only JSONL transcript 读写器。
 - 写入前会通过路径策略检查。
 - 写入前会检查受保护路径。
 - 工具元信息标记为 mutating，并要求上层确认。
-- 支持 `dry_run=true`，返回 unified diff 预览且不写入文件。
+- 默认 `dry_run=true`，返回 unified diff 预览且不写入文件。
 
 注意事项：
 
@@ -527,11 +555,26 @@ append-only JSONL transcript 读写器。
 - 允许执行时交给 `SecureMacOSSandboxExecutor.run()`；`full_access` 模式传入 `sandbox_enabled=False`，直接通过 `/bin/sh -lc` 执行。
 - 工具 schema 中的 `timeout` 已传给 macOS sandbox executor。
 - 工具 schema 支持可选 `cwd`，会通过 `SecurityPolicy.resolve_command_cwd()` 限制在 active workspace 内部，并拒绝文件、越界路径和受保护目录。
+- 子进程非零退出或超时会返回结构化 `ToolResult(ok=false)`，并在 metadata 中携带 `exit_code` / `timed_out`；不再把失败命令包装成成功工具结果。
+- `TimeoutExpired` 中可能出现的 bytes stdout/stderr 会在 executor 边界统一以 UTF-8 replacement 模式解码，避免 `str + bytes` 崩溃和 `b'...'` 泄漏到模型上下文。
+- `run_command` 拒绝 `nohup` 和独立 `&`，并引导模型使用 `start_process`；原始 `kill` / `pkill` / `killall` 及 `lsof | xargs kill` 由 ExecPolicy 拒绝。
 
 注意事项：
 
 - 权限确认和 approved retry 已在 WebSocket 主路径接入。
 - 项目级命令策略配置已有 trust-gated project config 第一片，后续需要补运行时批准规则持久化和策略编辑入口。
+
+### `processes/manager.py` 与 `tools/shell/process_control.py`
+
+受管理后台进程与模型工具适配层。
+
+当前状态：
+
+- manager 按 `project_root` 在同一 Runtime 内复用，避免新会话、cwd 或权限模式变化后丢失当前进程登记。
+- 启动时使用 `subprocess.Popen(..., start_new_session=True)` 创建独立进程组，stdin 固定为 DEVNULL，stdout/stderr 写入权限为 `0600` 的临时日志。
+- 可选 `expected_port` 会先用 `lsof` 检查未知占用，再等待 listener 就绪，并通过 PGID 验证 listener 属于刚启动的受管理进程。
+- `stop_process` 不接受 PID，只接受不可猜测的 process id；停止前再次核对 PGID，优先 SIGTERM，仅超时后升级 SIGKILL。
+- 当前登记只保证同一 Runtime 进程生命周期内可恢复，不会在应用重启后根据磁盘 PID 记录接管旧进程，避免 PID 重用导致误杀。
 
 ### `tools/network/web_fetch.py`
 
@@ -929,8 +972,8 @@ final_answer
 最近一次本地验证结果：
 
 - `.venv/bin/python -m unittest discover -s tests` 当前通过。
-- 当前单测数量：386。
-- `ToolRegistry` 能加载 21 个工具 schema。
+- 当前单测数量：407。
+- `ToolRegistry` 能加载 24 个工具 schema。
 - `desktop/` 下 `pnpm run typecheck` 与 `pnpm run build` 当前通过。
 - `read_file README.md` 可正常执行。
 - `list_files`、`file_search`、`run_tests`、`update_plan` 和 `create_task_list` 已进入默认工具目录。
@@ -993,6 +1036,8 @@ final_answer
 - Skills 本地文件型 MVP：repo/user skill catalog、progressive disclosure、`list_skills`、显式 skill 注入、`read_skill` / `read_skill_resource`、`skill_used` / `skill_warning` 事件，以及桌面端显式 skill 新增/导入/GitHub 安装与重新安装/curated registry 安装与可更新条目直接更新/编辑/删除、标准资源文件管理、安装来源记录、GitHub token header、版本字段、图标字段、registry update 提示、dependencies.tools 缺失提醒、quickstart、authoring guide、示例 package 和创建-选择-注入-读资源 smoke test。
 - 透明文件型 Memory 第一片：Session/Task Memory、显式偏好记录、摘要/list/search/forget 控制事件、会话切换自动摘要、MEMORY.md 索引和关键词搜索；不依赖向量数据库。
 - Stage 5 Permission/Sandbox Lite 第一片：权限弹窗上下文、`full_access` 风险提示、sandbox fallback 说明及聚焦回归测试。
+- Runtime Interaction Logging schema v2：按日 JSONL、actor/session/turn/request 关联、可检索级别与摘要、模型请求增量快照、重复 assistant runtime 事件消除和敏感内容排除。
+- Runtime-managed Processes 第一片：后台进程独立进程组、临时日志、端口预检与归属确认、自有 process id 状态查询和安全停止。
 - `plan_request` / `plan_confirm` / `plan_cancel` runtime first slice：支持先生成待确认计划书，确认后复用普通 `user_input` 执行路径；桌面端已有持久化计划模式开关、对话流计划书和轻量确认/取消动作卡，已确认计划书会注入模型执行上下文并参与 session recovery。
 - `edit_file` dry-run 预览。
 - `list_files` 文件枚举、`file_search` 文件名模糊搜索、`run_tests` 测试摘要工具。
@@ -1006,7 +1051,7 @@ final_answer
 
 ### 部分完成
 
-- `run_command` 已接 macOS 原生沙箱和 policy-driven Seatbelt 第一版，真实 workspace 改动会落盘；显式 `full_access` 模式会绕过 Seatbelt。
+- `run_command` 已接 macOS 原生沙箱和 policy-driven Seatbelt 第一版，真实 workspace 改动会落盘；显式 `full_access` 模式会绕过 Seatbelt。后台服务已迁移到受管理进程工具，但应用重启后的进程重新发现/接管仍未产品化。
 - WebSocket 事件和状态机主路径已建立，已有 TestClient 集成测试、等待点取消和忙碌反馈第一版；还缺断线恢复和更完整的流式中断。
 - workspace 当前完成后端协议闭环、Electron 原生目录选择入口、workspace 内 `run_command.cwd`、`change_directory`、`add_dir`、resume 重新验证、project instructions 分层加载和 `selected_root/project_root/current_dir` 分离。
 - 权限系统已有 `allow/deny/ask` 决策、统一 filesystem policy、prefix exec policy、runtime permission mode 和 policy-driven Seatbelt 第一版，但还不是完整可编辑 project policy。

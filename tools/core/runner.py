@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from processes import ManagedProcessManager, managed_process_manager
 from sandbox.macos_executor import SecureMacOSSandboxExecutor
 from security.circuit_breaker import CircuitBreaker
 from security.exec_policy import ExecPolicy
@@ -34,6 +35,7 @@ def create_tool_context(
     default_test_command: str | None = None,
     default_test_source: str | None = None,
     default_test_timeout: int = 60,
+    process_manager: ManagedProcessManager | None = None,
 ) -> ToolExecutionContext:
     selected = selected_root.resolve()
     project = (project_root or selected).resolve()
@@ -65,6 +67,7 @@ def create_tool_context(
         approval_policy=approval_policy,
         circuit_breaker=circuit_breaker or CircuitBreaker(threshold=3),
         command_executor=SecureMacOSSandboxExecutor(selected),
+        process_manager=process_manager or managed_process_manager(project),
         skill_resource_resolver=skill_resource_resolver or SkillResourceResolver(),
         default_test_command=(default_test_command or "").strip() or None,
         default_test_source=(default_test_source or "").strip() or None,
@@ -111,7 +114,7 @@ class ToolRunner:
             return ToolResult(ok=False, content=f"工具参数不是合法 JSON: {exc}")
 
         try:
-            if tool.meta.requires_approval and name != "run_command" and not approved:
+            if tool.meta.requires_approval and name not in {"run_command", "start_process"} and not approved:
                 if self.ctx.approval_policy == ApprovalPolicy.NEVER:
                     raise ToolPermissionError(
                         f"当前 approval policy 禁止请求用户批准: {name}",

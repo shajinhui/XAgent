@@ -22,6 +22,7 @@ DANGEROUS_PATTERNS = (
     r"wget\s+[^|]*\|\s*(sh|bash)",
     r"sudo\b",
     r"chmod\s+-r\s+777\b",
+    r"(^|[;&|]\s*|\bxargs\s+)(?:[\w./-]+/)?(kill|killall|pkill)\b",
 )
 
 PROTECTED_COMMAND_PATTERNS = (

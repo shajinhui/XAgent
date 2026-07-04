@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict
 
+from processes import ManagedProcessManager
 from sandbox.macos_executor import SecureMacOSSandboxExecutor
 from security.circuit_breaker import CircuitBreaker
 from security.permissions import ApprovalPolicy, FileSystemPolicy, NetworkPolicy, PermissionProfile
@@ -55,6 +56,7 @@ class ToolExecutionContext:
     approval_policy: ApprovalPolicy
     circuit_breaker: CircuitBreaker
     command_executor: SecureMacOSSandboxExecutor
+    process_manager: ManagedProcessManager
     turn_id: str | None = None
     diff_tracker: Any | None = None
     skill_resource_resolver: Any | None = None

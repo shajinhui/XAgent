@@ -10,7 +10,7 @@ from tools.interaction import ask_user
 from tools.network import web_fetch
 from tools.patching import patch_review
 from tools.search import grep, file_search
-from tools.shell import run_command
+from tools.shell import process_control, run_command
 from tools.skills import read_skill, read_skill_resource
 from tools.testing import run_tests
 from tools.planning import task_list
@@ -46,6 +46,21 @@ def builtin_tools() -> list[Tool]:
         FunctionTool(read_skill_resource.META, read_skill_resource.schema, read_skill_resource.run),
         FunctionTool(grep.META, grep.schema, grep.run),
         FunctionTool(run_command.META, run_command.schema, run_command.run),
+        FunctionTool(
+            process_control.START_META,
+            process_control.start_schema,
+            process_control.start_run,
+        ),
+        FunctionTool(
+            process_control.STATUS_META,
+            process_control.status_schema,
+            process_control.status_run,
+        ),
+        FunctionTool(
+            process_control.STOP_META,
+            process_control.stop_schema,
+            process_control.stop_run,
+        ),
         FunctionTool(web_fetch.META, web_fetch.schema, web_fetch.run),
     ]
 

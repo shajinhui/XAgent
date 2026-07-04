@@ -25,7 +25,7 @@ class WriteFileArgs(BaseModel):
     path: str = Field(..., description="要写入的文件路径")
     content: str = Field(..., description="写入内容")
     append: bool = Field(False, description="是否以追加模式写入")
-    dry_run: bool = Field(False, description="为 true 时只返回预览 diff，不写入文件")
+    dry_run: bool = Field(True, description="默认只生成预览 diff；显式为 false 时才直接写入")
 
 
 def schema() -> dict:
@@ -35,7 +35,7 @@ def schema() -> dict:
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "写入文件内容（支持覆盖或追加）",
+            "description": "生成文件写入预览（支持覆盖或追加）；默认不直接写入",
             "parameters": WriteFileArgs.model_json_schema(),
         },
     }

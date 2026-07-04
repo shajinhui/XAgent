@@ -87,7 +87,9 @@ class ContextModuleTests(unittest.TestCase):
                     "id": "call-1",
                     "function": {
                         "name": "write_file",
-                        "arguments": json.dumps({"path": "created.txt", "content": "hello"}),
+                        "arguments": json.dumps(
+                            {"path": "created.txt", "content": "hello", "dry_run": False}
+                        ),
                     },
                 },
                 turn,
