@@ -1,40 +1,86 @@
-# 
+# XCode
 
-# Xagent
+XCode 是一个用 Python 构建的 Codex 类本地 Coding Agent。Python Runtime 负责模型循环、工具执行、安全策略、会话恢复和本地数据持久化；Electron + Vue 桌面端负责聊天、审批、Diff Review、任务计划与会话管理。
 
-一个用于学习和实习展示的 Codex 类本地 Agent 项目：Python runtime 负责模型循环、工具执行、安全策略、沙箱和会话持久化，Electron/Vue 桌面客户端负责聊天、审批、工具过程和历史会话体验。
-<img width="940" height="828" alt="截屏2026-05-13 18 35 59" src="https://github.com/user-attachments/assets/b35d6895-5fda-4d4e-80b1-ea53b1f95b88" />
+> 当前状态：Stage 2 Alpha。核心 Runtime 和桌面客户端主链路已经可用，仍处于本地开发与产品化阶段，不建议直接用于无人值守的生产任务。
 
+## 界面演示
 
-![](/Users/shajinhui/Desktop/截屏2026-05-13%2018.35.59.png)
+### 项目阅读与结构分析
 
-## 标准开发流程
+![XCode 阅读项目并输出结构分析](docs/images/project-reading.png)
 
-1. 初始化环境与依赖
+### 实时任务进度
+
+![XCode 展示工具调用和任务执行进度](docs/images/progress-tracking.png)
+
+### 交互式澄清
+
+![XCode 在信息不足时向用户提供结构化选项](docs/images/interactive-clarification.png)
+
+### Skills 扩展能力
+
+![XCode 使用 rotate-pdf Skill 处理 PDF 文件](docs/images/skill-pdf-rotation.png)
+
+## 已实现能力
+
+- **Agent Runtime**：基于 LangGraph 与 LiteLLM 的流式模型循环，支持工具调用、澄清、取消、挂起和恢复。
+- **桌面客户端**：Electron + Vue + TypeScript，支持聊天、Markdown、工具时间线、权限确认、历史会话和工作区切换。
+- **Workspace 边界**：区分 `selected_root`、`project_root`、`current_dir` 与显式添加的额外目录；恢复会话时重新校验安全边界。
+- **权限与沙箱**：提供 `request_approval`、`auto_approve`、`full_access`、`custom` 四种模式；macOS 默认通过 Seatbelt 限制文件和网络访问。
+- **安全文件修改**：写入工具默认只生成 Patch Preview，用户可检查 Diff 后应用、拒绝或回滚，并可在应用后运行测试。
+- **Git 只读审查**：支持查看状态、变更文件和 Diff，不自动提交、推送或创建 PR。
+- **持久会话**：SQLite 索引 + append-only JSONL transcript，支持服务重启后的会话恢复。
+- **本地 Skills**：支持 repo/user Skills 的发现、选择、读取、创建、导入、安装、更新和资源管理。
+- **Plan Mode**：可先生成待确认计划，确认后再进入正常实现回合。
+- **透明 Memory**：支持会话摘要、任务状态、关键词检索和显式偏好记录；当前不会自动把 durable memory 注入模型提示词。
+- **受管理后台进程**：通过 Runtime 启动、检查和停止服务进程，限制直接后台化与任意 PID 终止。
+- **本地可观测性**：结构化 Runtime 日志记录模型、工具和用户交互，同时过滤凭证、隐藏推理和完整 Skill 内容。
+
+## 环境要求
+
+- macOS（原生 Seatbelt 沙箱目前仅支持 macOS）
+- Python 3.11+
+- Node.js 20+
+- pnpm
+
+非 macOS 环境可以开发和运行部分 Runtime 能力，但不能获得当前同等的命令沙箱保障。
+
+## 快速开始
+
+### 1. 安装 Python 依赖
 
 ```bash
 make init
 ```
 
-2. 配置环境变量
+### 2. 配置模型
 
 ```bash
 cp .env.example .env
 ```
 
-3. 启动 Agent（CLI）
+至少填写：
 
-```bash
-make run
+```dotenv
+API_KEY=your-api-key
+MODEL_PROVIDER=deepseek
+MODEL_NAME=your-model-id
 ```
 
-4. 启动 WebSocket 服务（阶段 2）
+如服务商使用自定义兼容地址，再配置 `API_BASE`。完整可选项和说明见 [`.env.example`](.env.example)。
+
+### 3. 启动 Runtime 服务
 
 ```bash
 make run-server
 ```
 
-5. 启动桌面客户端（另开终端）
+默认监听 `ws://127.0.0.1:8000/agent/ws`。
+
+### 4. 启动桌面客户端
+
+另开一个终端：
 
 ```bash
 cd desktop
@@ -42,103 +88,97 @@ pnpm install
 pnpm run dev
 ```
 
-## 手动方式（可选）
+桌面端启动后，选择一个本地目录作为工作区即可开始使用。
+
+## CLI 模式
+
+如果只想体验终端 Agent：
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python agent_loop.py
+make run
 ```
+
+CLI 与桌面端共享核心工具和安全策略，但桌面端提供更完整的审批、Patch Review 和会话体验。
+
+## 安全模型
+
+XCode 把用户选择的工作区视为安全边界：
+
+- 默认模式下，修改文件、执行命令和运行测试需要用户批准。
+- `write_file` 与 `edit_file` 默认生成待审查 Patch，不直接修改源码。
+- `.env` 默认禁止文件工具读取和写入；`.git`、`.codex-mini`、`.venv`、`__pycache__` 等目录禁止写入。
+- 命令默认禁止网络访问，额外目录必须由用户显式授权。
+- 长期运行的服务应使用受管理进程工具，不能用 `nohup` 或 `&` 绕过 Runtime。
+- `full_access` 会关闭 Seatbelt 并允许网络，仅应在明确理解风险时使用。
+
+项目级 `.codex-mini/config.toml` 只有在用户将项目标记为 trusted 后才会加载，并且只接受受限的白名单配置。
 
 ## 项目结构
 
-- `agent_loop.py`：终端版 Agent 主循环（LangGraph 条件循环）
-- `context/`：模型可见上下文片段（环境、权限、模型、用户输入）
-- `context_manager/`：模型历史上下文管理与截断 helpers
-- `tools/core/`：工具协议、纯注册表、路由、执行器、默认目录和共享类型
-- `tools/filesystem/`：读文件、写文件、按行编辑工具
-- `tools/search/`：代码搜索工具（rg/grep）
-- `tools/shell/`：命令工具（macOS 原生沙箱执行）
-- `tools/network/`：可选联网工具
-- `tools/interaction/`：模型主动澄清提问工具
-- `security/`：filesystem policy、exec policy、路径校验和熔断器
-- `sandbox/macos_executor.py`：macOS Seatbelt 安全执行器
-- `server/app.py`：FastAPI WebSocket 服务（`/agent/ws`）
-- `session/`：SQLite 会话索引、JSONL transcript、历史会话恢复和单轮 `TurnContext`
-- `desktop/`：Electron + Vue + TypeScript 桌面客户端壳
-- `pyproject.toml`：项目元信息与依赖（标准 Python 项目配置）
-- `Makefile`：标准化开发命令入口
+```text
+.
+├── agent_loop.py       # CLI Agent 入口
+├── server/             # WebSocket 协议、请求处理与模型回合 Runtime
+├── desktop/            # Electron + Vue 桌面客户端
+├── tools/              # 文件、搜索、Shell、Git、Patch、Skills 等工具
+├── security/           # 文件系统、权限、命令与网络策略
+├── sandbox/            # macOS Seatbelt 执行器
+├── workspace/          # 工作区模型、校验、信任与项目配置
+├── session/            # SQLite 索引、JSONL transcript 与恢复
+├── patch/              # Patch proposal、Diff 与状态存储
+├── skills/             # Skills 发现、校验、安装与管理
+├── memory/             # Session/Task Memory 与检索
+├── processes/          # Runtime 管理的后台进程
+├── observability/      # 本地结构化运行日志
+├── prompts/            # 模块化系统提示词
+└── tests/              # Runtime 单元与集成测试
+```
 
-更完整的当前架构状态说明见：[`docs/PROJECT_ARCHITECTURE_STATUS.md`](docs/PROJECT_ARCHITECTURE_STATUS.md)
+核心边界是：桌面端保持轻量，Python Runtime 统一拥有工具执行、权限判断、会话持久化和恢复能力。
 
-阶段四产品化路线见：[`docs/PRODUCTIZATION_ROADMAP.md`](docs/PRODUCTIZATION_ROADMAP.md)
+## 开发与验证
 
-workspace 与权限策略专题架构见：[`docs/WORKSPACE_PERMISSION_ARCHITECTURE.md`](docs/WORKSPACE_PERMISSION_ARCHITECTURE.md)
-
-## 说明
-
-- 模型调用统一配置 `API_KEY`，不要按服务商拆成 `OPENAI_API_KEY` / `DEEPSEEK_API_KEY`。
-- `MODEL_PROVIDER` 标识服务商，`MODEL_NAME` 是主 Agent 的原始模型 id；`LOW_COST_MODEL_PROVIDER` / `LOW_COST_MODEL_NAME` 是标题生成、路由判断等简单任务使用的低成本模型配置，默认继承主模型。
-- 桌面端会从后端读取模型配置；DeepSeek 会优先通过 `${API_BASE:-https://api.deepseek.com}/models` 动态拉取模型列表，成功时直接使用接口返回的模型 id，失败时只回退到 `MODEL_OPTIONS`。`REASONING_EFFORT=off|low|medium|high|max` 可设置默认思考程度。DeepSeek 模型会额外按官方 thinking 参数处理：`off` 显式关闭 thinking，`low/medium` 映射为 `high`，`xhigh/max` 映射为 `max`。
-- 阶段 2 已将 `run_command` 切换到 macOS 原生沙箱执行，并增加 prefix exec policy、风险拦截、session allow 和工具元信息。
-- macOS 沙箱当前使用 `sandbox-exec`/Seatbelt：命令在真实项目目录执行，默认禁止网络，并按 `FileSystemPolicy` 生成可读/可写根目录。
-- Workspace protocol 已支持 `open_workspace`、`change_directory` 和 `add_dir`；额外目录必须显式加入，Python runtime 会刷新后续工具执行的 filesystem policy。
-- 项目本地策略配置使用 trust gate：默认 `session_only` 不读取 `.codex-mini/config.toml`；只有用户侧 trust store 标记为 trusted 的项目才会读取受白名单约束的 permission / exec policy 配置。
-- 恢复历史会话只接受当前 v2 workspace 快照：`selected_root`、`project_root`、`current_dir`、`additional_roots` 必须齐全且可重新验证；旧 `root` / `allowed_roots` 数据或失效路径会返回 `workspace_error`，不做静默修复。
-- 旧本地会话数据不迁移；需要清理时显式运行 `make clean-sessions` 删除 `.codex-mini/sessions/`。
-- 模型上下文会按 `project_root -> current_dir` 分层加载 `AGENTS.md`；如果当前目录在外部 additional root 内，不会越过原项目根去加载外部项目说明。
-- 如果当前进程本身已经处在受限沙箱里，`sandbox-exec` 可能返回 `sandbox_apply: Operation not permitted`；正常终端/桌面应用运行环境下再做端到端验证。
-- 会话运行态会写入 `.codex-mini/sessions/`：`index.sqlite` 保存会话索引，`transcripts/*.jsonl` 保存 append-only 事件流。
-- 会话标题根据首条用户提问调用模型生成，并在返回前清理与截断。
-- 桌面端当前是本地 runtime client，不是最终的产品官网或独立 Web 应用。
-
-## 测试
+运行后端测试：
 
 ```bash
 .venv/bin/python -m unittest discover -s tests
 ```
 
-## WebSocket 联调（wscat）
+检查 Python 模块是否可编译：
 
 ```bash
-wscat -c ws://127.0.0.1:8000/agent/ws
+.venv/bin/python -m compileall agent_loop.py tools security sandbox server session workspace skills patch memory observability processes tests
 ```
 
-连接后发送：
+检查桌面端并构建：
 
-```json
-{"type":"user_input","content":"列出当前目录下的 Python 文件"}
+```bash
+cd desktop
+pnpm run typecheck
+pnpm run build
 ```
 
-服务端会推送这些事件：
+本地生成数据位于 `.codex-mini/`，其中 sessions、memory、logs、patches 和 task state 都不应提交到 Git。需要清理会话时可显式运行：
 
-- `ready`
-- `session_created`
-- `sessions_list`
-- `turn_started`
-- `tool_call_started`
-- `tool_call_result`
-- `permission_request`
-- `permission_decision_ack`
-- `clarification_request`
-- `clarification_response_ack`
-- `session_suspended`
-- `assistant_token`
-- `final_answer`
-- `conversation_title`
-
-当收到 `permission_request` 后，客户端可以发送：
-
-```json
-{"type":"permission_decision","approved":true}
+```bash
+make clean-sessions
 ```
 
-常用客户端控制事件：
+## 文档
 
-```json
-{"type":"list_sessions","limit":20}
-{"type":"new_session"}
-{"type":"resume_session","session_id":"已有 session id"}
-{"type":"conversation_title_request","messages":[{"role":"user","content":"读取 README"}]}
-```
+- [当前架构与实现状态](docs/PROJECT_ARCHITECTURE_STATUS.md)
+- [产品化路线](docs/PRODUCTIZATION_ROADMAP.md)
+- [Workspace 与权限架构](docs/WORKSPACE_PERMISSION_ARCHITECTURE.md)
+- [Stage 4 Change Review Runtime](docs/STAGE4_CHANGE_REVIEW_RUNTIME.md)
+- [Skills 架构](docs/SKILLS_ARCHITECTURE.md)
+- [Skills 快速开始](docs/SKILLS_QUICKSTART.md)
+- [Skill 编写指南](docs/SKILL_AUTHORING_GUIDE.md)
+- [Runtime 日志说明](docs/RUNTIME_LOGGING.md)
+
+## 当前边界
+
+- 这是本地 Alpha 项目，不是托管服务或最终产品官网。
+- Durable Memory 已可管理，但尚未自动注入模型上下文。
+- Plan Mode 已支持生成、确认和取消计划，计划编辑与更严格的逐步执行约束仍未产品化。
+- Workspace/Permission v2 的核心切片已经落地，项目级策略编辑、跨会话持久 allowlist 和更细粒度网络规则仍在后续范围。
+- IDE 扩展尚未实现；未来会复用当前 Runtime 协议，而不是复制工具执行逻辑。
